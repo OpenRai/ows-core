@@ -4,7 +4,7 @@
 
 ## Design Decision
 
-**LWS enforces policies as a mandatory gate between the signing request and key decryption. Policies are evaluated before the signing enclave is invoked. Default behavior is deny-by-default when a policy is attached — only transactions that pass all rules are signed.**
+**LWS uses a two-tier access model: the wallet owner has unrestricted (sudo) access, while agents authenticate via API keys whose attached policies are evaluated before the signing enclave is invoked. Policies are attached to API keys, not wallets — wallets are dumb containers for key material. Default behavior is deny-by-default when a policy is attached to a key — only transactions that pass all of the key's policies are signed.**
 
 ### Why Pre-Signing Policy Enforcement
 
@@ -22,7 +22,25 @@ LWS uses pre-signing enforcement because:
 3. It complements on-chain enforcement (use both for defense in depth)
 4. Following Privy's model: policies are evaluated inside the signing enclave's trust boundary
 
-## Policy Structure
+## Policy Executable Protocol
+
+A policy is any executable program. LWS invokes the executable, pipes a `PolicyContext` JSON object to its stdin, and reads a `PolicyResult` JSON object from its stdout.
+
+This follows the Unix philosophy and mirrors the enclave protocol already used by LWS (JSON-RPC over stdio). Policies can be written in any language — shell scripts, Python, Go, Rust, JavaScript — whatever the operator prefers.
+
+**Invocation:**
+
+```
+echo '<PolicyContext JSON>' | /path/to/policy-executable
+```
+
+**Rules:**
+- The executable receives the full `PolicyContext` as a single JSON object on stdin
+- The executable MUST write a single `PolicyResult` JSON object to stdout
+- A non-zero exit code is treated as a denial (equivalent to `{ "allow": false, "reason": "process exited with code N" }`)
+- Stderr is captured and logged to the audit log but does not affect the verdict
+
+## Policy File Format
 
 Policies are JSON files stored in `~/.lws/policies/`:
 
@@ -32,191 +50,110 @@ Policies are JSON files stored in `~/.lws/policies/`:
   "name": "Safe Agent Policy",
   "version": 1,
   "created_at": "2026-02-27T10:00:00Z",
-  "rules": [
-    {
-      "type": "max_value",
-      "chain_id": "eip155:8453",
-      "asset": "native",
-      "max_amount": "1000000000000000000",
-      "period": "daily"
-    },
-    {
-      "type": "max_value",
-      "chain_id": "eip155:8453",
-      "asset": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
-      "max_amount": "100000000",
-      "period": "per_tx"
-    },
-    {
-      "type": "contract_allowlist",
-      "contracts": [
-        "eip155:8453:0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
-        "eip155:8453:0x4200000000000000000000000000000000000006"
-      ]
-    },
-    {
-      "type": "require_simulation"
-    },
-    {
-      "type": "chain_restriction",
-      "allowed_chains": ["eip155:8453", "eip155:84532"]
-    }
-  ],
+  "executable": "/home/user/.lws/plugins/policies/safe-agent.sh",
+  "config": {
+    "max_daily_spend_wei": "1000000000000000000",
+    "allowed_chains": ["eip155:8453", "eip155:84532"]
+  },
   "action": "deny"
 }
 ```
 
-## Rule Types
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `id` | string | yes | Unique policy identifier |
+| `name` | string | yes | Human-readable policy name |
+| `version` | integer | yes | Policy schema version (currently `1`) |
+| `created_at` | string | yes | ISO 8601 creation timestamp |
+| `executable` | string | yes | Absolute path to the policy executable |
+| `config` | object | no | Static configuration passed to the executable as part of `PolicyContext` |
+| `action` | string | yes | `"deny"` or `"warn"` — what happens when the policy returns `allow: false` |
 
-### `max_value` — Spending Limits
+The executable MUST be a file with execute permission. Implementations MUST verify the executable exists and is executable at policy attachment time.
 
-Caps the value of transactions over a configurable time period.
+## PolicyContext (stdin)
+
+The JSON object piped to the policy executable's stdin:
 
 ```json
 {
-  "type": "max_value",
+  "transaction": {
+    "to": "0x4B0897b0513fdC7C541B6d9D7E929C4e5364D2dB",
+    "value": "1000000000000000",
+    "data": "0x"
+  },
   "chain_id": "eip155:8453",
-  "asset": "native",
-  "max_amount": "1000000000000000000",
-  "period": "daily"
+  "wallet": {
+    "id": "3198bc9c-6672-5ab3-d995-4942343ae5b6",
+    "name": "agent-treasury",
+    "chain_type": "evm",
+    "accounts": [
+      {
+        "account_id": "eip155:8453:0xab16a96D359eC26a11e2C2b3d8f8B8942d5Bfcdb",
+        "address": "0xab16a96D359eC26a11e2C2b3d8f8B8942d5Bfcdb",
+        "chain_id": "eip155:8453"
+      }
+    ]
+  },
+  "simulation": {
+    "success": true,
+    "gasEstimate": "21000",
+    "stateChanges": [],
+    "warnings": []
+  },
+  "timestamp": "2026-02-27T10:35:22Z",
+  "api_key_id": "7a2f1b3c-4d5e-6f7a-8b9c-0d1e2f3a4b5c"
 }
 ```
 
-| Field | Type | Description |
-|---|---|---|
-| `chain_id` | ChainId | Scope to a specific chain, or `"*"` for all chains |
-| `asset` | string | Token contract address (CAIP-10) or `"native"` |
-| `max_amount` | string | Maximum amount in the asset's smallest unit |
-| `period` | Duration | `"per_tx"`, `"hourly"`, `"daily"`, `"weekly"`, `"monthly"` |
+| Field | Type | Always Present | Description |
+|---|---|---|---|
+| `transaction` | object | yes | The chain-specific serialized transaction being evaluated |
+| `chain_id` | string | yes | CAIP-2 chain identifier |
+| `wallet` | object | yes | Wallet descriptor (id, name, chain_type, accounts — never key material) |
+| `simulation` | object | no | Simulation result, if simulation was performed |
+| `timestamp` | string | yes | ISO 8601 timestamp of the signing request |
+| `api_key_id` | string | yes | The ID of the API key making this request |
 
-Spending is tracked in `~/.lws/state/spending.json`, a rolling ledger of signed transaction values keyed by `(wallet_id, chain_id, asset, period)`.
+The `wallet` field never contains private keys, mnemonics, or encryption parameters. It is a subset of the wallet descriptor containing only public metadata.
 
-### `allowlist` — Recipient Allowlist
+The policy executable can use `api_key_id` to apply per-agent logic (e.g., different spending limits for different agents). The static `config` from the policy file is resolved by the policy engine and merged into the executable's environment — it is not passed through `PolicyContext`.
 
-Only allows transactions to specified addresses.
+## PolicyResult (stdout)
+
+The JSON object the policy executable writes to stdout:
 
 ```json
 {
-  "type": "allowlist",
-  "addresses": [
-    "eip155:8453:0x4B0897b0513fdC7C541B6d9D7E929C4e5364D2dB",
-    "eip155:8453:0x1234567890abcdef1234567890abcdef12345678"
-  ]
+  "allow": true
 }
 ```
 
-Addresses use CAIP-10 format. A transaction to any address not in the list is denied.
-
-### `denylist` — Recipient Denylist
-
-Blocks transactions to specified addresses (known scam contracts, sanctioned addresses, etc.).
+Or on denial:
 
 ```json
 {
-  "type": "denylist",
-  "addresses": [
-    "eip155:1:0xdeaddeaddeaddeaddeaddeaddeaddeaddeaddead"
-  ]
+  "allow": false,
+  "reason": "Daily spending limit exceeded: 1.5 ETH sent, limit is 1.0 ETH"
 }
 ```
 
-### `chain_restriction` — Allowed Chains
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `allow` | boolean | yes | `true` to permit the transaction, `false` to deny |
+| `reason` | string | no | Human-readable explanation (logged to audit log; returned in error on denial) |
 
-Limits which chains a wallet can transact on.
+## Timeout and Failure Semantics
 
-```json
-{
-  "type": "chain_restriction",
-  "allowed_chains": ["eip155:8453", "eip155:84532"]
-}
-```
+| Scenario | Behavior |
+|---|---|
+| Executable exits with code 0, valid JSON on stdout | Use the `PolicyResult` as the verdict |
+| Executable exits with non-zero code | **Deny.** Treat as `{ "allow": false }`. Stderr is logged. |
+| Executable does not produce valid JSON on stdout | **Deny.** Log a parse error to the audit log. |
+| Executable does not exit within 5 seconds | **Deny.** Kill the process. Log a timeout to the audit log. |
+| Executable not found or not executable | **Deny.** Log an error. This is checked at policy attachment time to fail early. |
 
-### `contract_allowlist` — Smart Contract Allowlist
-
-Only allows interactions with specified smart contracts. Applies to the `to` field of transactions with `data` (i.e., contract calls).
-
-```json
-{
-  "type": "contract_allowlist",
-  "contracts": [
-    "eip155:8453:0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"
-  ]
-}
-```
-
-### `require_simulation` — Mandatory Simulation
-
-Requires that a transaction simulation succeeds before signing. If simulation fails or returns warnings, the transaction is denied.
-
-```json
-{
-  "type": "require_simulation"
-}
-```
-
-### `time_restriction` — Time-Based Access
-
-Limits when transactions can be signed.
-
-```json
-{
-  "type": "time_restriction",
-  "allowed_hours": {
-    "start": 9,
-    "end": 17,
-    "timezone": "America/New_York"
-  }
-}
-```
-
-### `custom` — Custom Evaluator
-
-Points to a JavaScript/TypeScript module that implements a custom policy rule.
-
-```json
-{
-  "type": "custom",
-  "evaluator": "~/.lws/plugins/custom-rules/check-slippage.js"
-}
-```
-
-The evaluator module MUST export a function with the following signature:
-
-```typescript
-export async function evaluate(context: PolicyContext): Promise<PolicyResult> {
-  // context.transaction — the transaction being evaluated
-  // context.simulation — simulation result (if available)
-  // context.wallet — wallet descriptor
-  // context.spending — current spending state
-  return { allow: true };  // or { allow: false, reason: "..." }
-}
-
-interface PolicyContext {
-  transaction: SerializedTransaction;
-  simulation?: SimulationResult;
-  wallet: WalletDescriptor;
-  spending: SpendingState;
-  chainId: ChainId;
-}
-
-interface PolicyResult {
-  allow: boolean;
-  reason?: string;
-}
-```
-
-## Evaluation Order
-
-1. **Chain restriction** — is this chain allowed?
-2. **Denylist** — is the recipient blocked?
-3. **Allowlist** — is the recipient permitted? (skipped if no allowlist rule)
-4. **Contract allowlist** — is the contract permitted? (skipped for simple transfers)
-5. **Simulation** — does the transaction succeed? (if `require_simulation`)
-6. **Max value** — would this exceed spending limits?
-7. **Time restriction** — is the current time within allowed hours?
-8. **Custom evaluators** — do all custom rules pass?
-
-Evaluation short-circuits on the first denial. All denials are logged to the audit log.
+The default-deny stance ensures that policy failures are never silently bypassed.
 
 ## Policy Actions
 
@@ -225,37 +162,75 @@ Evaluation short-circuits on the first denial. All denials are logged to the aud
 | `deny` | Block the transaction and return a `POLICY_DENIED` error |
 | `warn` | Log a warning to the audit log but allow the transaction to proceed |
 
+## Who Is Evaluated?
+
+LWS uses a two-tier access model:
+
+| Caller | Authentication | Policy Evaluation |
+|---|---|---|
+| **Owner** | Passphrase/passkey | **None.** The owner has unrestricted (sudo) access to all wallets. No policies are evaluated. |
+| **Agent (API key)** | `lws_key_...` token | **All policies attached to the API key** are evaluated. Every policy must allow the transaction (AND semantics). |
+
+The owner can always sign any transaction on any wallet — if they want self-imposed limits, they create an API key for themselves and use that instead.
+
 ## Policy Attachment
 
-Policies are attached to wallets via the `policy_ids` field in the wallet file:
+Policies are attached to API keys, not wallets. When an API key is created, it is scoped to specific wallets and policies:
 
 ```bash
-# CLI
-lws policy attach --wallet agent-treasury --policy safe-agent-policy
+# Create a policy
+lws policy create --file safe-agent-policy.json
 
-# Programmatic
-await lws.attachPolicy("3198bc9c-...", "safe-agent-policy");
+# Create an API key with wallet scope and policy attachment
+lws key create --name "claude-agent" --wallet agent-treasury --policy safe-agent-policy
+# => lws_key_a1b2c3d4e5f6...  (shown once, store securely)
 ```
 
-A wallet can have at most one policy attached (following Privy's model). The policy can contain multiple rules. To change policies, detach the current one and attach a new one.
+An API key can have multiple policies attached. All attached policies are evaluated — every policy must allow the transaction for it to proceed (AND semantics). Evaluation short-circuits on the first denial. All denials are logged to the audit log.
 
-## Spending State
+## Example: Spending Limit Policy (Shell Script)
 
-Spending is tracked in `~/.lws/state/spending.json`:
+To illustrate the protocol, here is a minimal spending-limit policy implemented as a shell script. This is not a built-in type — it is a user-provided executable like any other policy.
+
+```bash
+#!/usr/bin/env bash
+# spending-limit.sh — Deny transactions over 1 ETH (1e18 wei)
+set -euo pipefail
+
+MAX_WEI="1000000000000000000"
+
+# Read PolicyContext from stdin
+CONTEXT=$(cat)
+
+# Extract the transaction value (defaults to "0" if absent)
+VALUE=$(echo "$CONTEXT" | jq -r '.transaction.value // "0"')
+
+# Compare (jq handles big-number string comparison)
+EXCEEDS=$(echo "$CONTEXT" | jq --arg max "$MAX_WEI" --arg val "$VALUE" \
+  '($val | tonumber) > ($max | tonumber)')
+
+if [ "$EXCEEDS" = "true" ]; then
+  echo '{"allow": false, "reason": "Transaction value exceeds 1 ETH limit"}'
+  exit 0
+fi
+
+echo '{"allow": true}'
+```
+
+The corresponding policy file:
 
 ```json
 {
-  "3198bc9c-...": {
-    "eip155:8453:native:daily": {
-      "amount": "500000000000000000",
-      "period_start": "2026-02-27T00:00:00Z",
-      "period_end": "2026-02-28T00:00:00Z"
-    }
-  }
+  "id": "spending-limit",
+  "name": "1 ETH Per-Transaction Limit",
+  "version": 1,
+  "created_at": "2026-02-27T10:00:00Z",
+  "executable": "/home/user/.lws/plugins/policies/spending-limit.sh",
+  "action": "deny"
 }
 ```
 
-Period boundaries are UTC-based. When a period expires, the counter resets. The spending state file has the same `0600` permissions as wallet files.
+A more sophisticated spending-limit policy that tracks cumulative spending over time would maintain its own state file — that is an implementation detail of the policy executable, not a concern of the core spec.
 
 ## References
 

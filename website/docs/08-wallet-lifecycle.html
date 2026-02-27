@@ -283,7 +283,7 @@ const wallet = await lws.createWallet({
       <ol>
         <li><strong>Authenticate</strong> &mdash; Verify the password against the wallet's encryption.</li>
         <li><strong>Check balances</strong> &mdash; Query all accounts for remaining balances. If non-zero balances are found, display a warning and require <code>--force</code> or interactive confirmation.</li>
-        <li><strong>Remove policy bindings</strong> &mdash; Detach any policies that reference this wallet.</li>
+        <li><strong>Update API keys</strong> &mdash; Remove the wallet ID from the <code>wallet_ids</code> array of all API keys that reference it.</li>
         <li><strong>Secure delete</strong> &mdash; Overwrite the wallet file with random bytes, then delete it. On supported filesystems, use <code>shred</code> or equivalent.</li>
         <li><strong>Audit log</strong> &mdash; Record the deletion event (wallet ID, timestamp, account addresses) in the audit log. The audit entry persists even after the wallet file is gone.</li>
       </ol>
@@ -337,7 +337,6 @@ const wallet = await lws.getWallet("3198bc9c-...");
 //   chainType: "evm",
 //   createdAt: "2026-02-27T10:30:00Z",
 //   accounts: [...],
-//   policyIds: ["spending-limit-01"],
 //   keyType: "mnemonic",
 //   metadata: {}
 // }</pre>

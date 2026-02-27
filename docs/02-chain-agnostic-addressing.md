@@ -102,13 +102,12 @@ await lws.sign({
 const accounts = await lws.listAccounts("3198bc9c-...");
 // => ["eip155:8453:0xab16...", "eip155:1:0xab16..."]
 
-// Policy rule scoped to a chain
-const rule: PolicyRule = {
-  type: "max_value",
+// PolicyContext uses CAIP-2 chain identifiers
+const context: PolicyContext = {
+  transaction: { to: "0x...", value: "1000000000000000000" },
   chainId: "eip155:8453",          // CAIP-2
-  asset: "native",
-  maxAmount: "1000000000000000000", // 1 ETH in wei
-  period: "daily"
+  wallet: { /* ... */ },
+  timestamp: new Date().toISOString()
 };
 ```
 

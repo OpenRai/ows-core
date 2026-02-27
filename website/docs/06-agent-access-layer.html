@@ -253,38 +253,33 @@
 }</pre>
 
       <h3>lws_get_policy</h3>
-      <p>Get the active policies for a wallet.</p>
+      <p>Get the policies attached to the caller's API key. Returns empty for owner access.</p>
 <pre>{
   "name": "lws_get_policy",
-  "description": "Get the active policies attached to a wallet. Returns policy rules, spending limits, allowlists, and other constraints the agent must respect.",
+  "description": "Get the policies attached to the caller's API key. Returns policy rules, spending limits, allowlists, and other constraints. Returns empty for owner access.",
   "inputSchema": {
     "type": "object",
-    "properties": {
-      "walletId": {
-        "type": "string",
-        "description": "The wallet ID (UUID) to get policies for."
-      }
-    },
-    "required": ["walletId"]
+    "properties": {},
+    "required": []
   }
 }</pre>
 
       <h2>MCP Configuration</h2>
-      <p>To connect LWS as an MCP server, add it to your MCP client configuration.</p>
+      <p>To connect LWS as an MCP server, add it to your MCP client configuration. The MCP server can be scoped to an API key via <code>--key</code> or the <code>LWS_API_KEY</code> environment variable. If no key is provided, it requires passphrase unlock and operates in owner (sudo) mode.</p>
 
-      <h3>Generic MCP Config</h3>
+      <h3>Agent Access (API Key)</h3>
 <pre>{
   "mcpServers": {
     "lws": {
       "command": "lws",
-      "args": ["mcp", "serve"],
+      "args": ["mcp", "serve", "--key", "lws_key_a1b2c3d4e5f6..."],
       "env": {}
     }
   }
 }</pre>
 
-      <h3>Claude Code Config</h3>
-      <p>Add to <code>.claude/mcp.json</code> in your project root or <code>~/.claude/mcp.json</code> globally:</p>
+      <h3>Owner Access (Sudo)</h3>
+      <p>No API key &mdash; requires passphrase unlock:</p>
 <pre>{
   "mcpServers": {
     "lws": {
@@ -311,34 +306,37 @@
           <tr><th>Method</th><th>Path</th><th>Description</th></tr>
         </thead>
         <tbody>
-          <tr><td><code>GET</code></td><td><code>/v1/wallets</code></td><td>List all wallets</td></tr>
-          <tr><td><code>POST</code></td><td><code>/v1/wallets</code></td><td>Create a new wallet</td></tr>
+          <tr><td><code>GET</code></td><td><code>/v1/wallets</code></td><td>List wallets (scoped by API key)</td></tr>
+          <tr><td><code>POST</code></td><td><code>/v1/wallets</code></td><td>Create a new wallet (owner only)</td></tr>
           <tr><td><code>GET</code></td><td><code>/v1/wallets/:id</code></td><td>Get wallet details</td></tr>
-          <tr><td><code>DELETE</code></td><td><code>/v1/wallets/:id</code></td><td>Delete a wallet</td></tr>
+          <tr><td><code>DELETE</code></td><td><code>/v1/wallets/:id</code></td><td>Delete a wallet (owner only)</td></tr>
           <tr><td><code>GET</code></td><td><code>/v1/wallets/:id/balance</code></td><td>Get wallet balance</td></tr>
           <tr><td><code>POST</code></td><td><code>/v1/wallets/:id/sign</code></td><td>Sign a transaction</td></tr>
           <tr><td><code>POST</code></td><td><code>/v1/wallets/:id/sign-and-send</code></td><td>Sign and broadcast a transaction</td></tr>
           <tr><td><code>POST</code></td><td><code>/v1/wallets/:id/sign-message</code></td><td>Sign an arbitrary message</td></tr>
           <tr><td><code>POST</code></td><td><code>/v1/wallets/:id/simulate</code></td><td>Simulate a transaction</td></tr>
-          <tr><td><code>GET</code></td><td><code>/v1/wallets/:id/policy</code></td><td>Get wallet policies</td></tr>
-          <tr><td><code>PUT</code></td><td><code>/v1/wallets/:id/policy</code></td><td>Update wallet policies</td></tr>
-          <tr><td><code>DELETE</code></td><td><code>/v1/wallets/:id/policy/:policyId</code></td><td>Remove a policy from a wallet</td></tr>
+          <tr><td><code>GET</code></td><td><code>/v1/wallets/:id/policy</code></td><td>Get caller's policies</td></tr>
+          <tr><td><code>POST</code></td><td><code>/v1/keys</code></td><td>Create API key (owner only)</td></tr>
+          <tr><td><code>GET</code></td><td><code>/v1/keys</code></td><td>List API keys (owner only)</td></tr>
+          <tr><td><code>GET</code></td><td><code>/v1/keys/:id</code></td><td>Get key details (owner only)</td></tr>
+          <tr><td><code>DELETE</code></td><td><code>/v1/keys/:id</code></td><td>Revoke key (owner only)</td></tr>
         </tbody>
       </table>
 
       <h3>Authentication</h3>
-      <p>The REST API uses Bearer token authentication. The token is stored in <code>~/.lws/config.json</code>:</p>
-<pre>{
-  "api": {
-    "port": 2100,
-    "bind": "127.0.0.1",
-    "token": "lws_a1b2c3d4e5f6..."
-  }
-}</pre>
-      <p>All requests must include the token in the <code>Authorization</code> header:</p>
+      <p>The REST API supports two authentication modes:</p>
+      <p><strong>API key (agent access):</strong> Agents authenticate with an API key prefixed <code>lws_key_</code>. The key is scoped to specific wallets and has policies attached.</p>
 <pre>curl -X GET http://127.0.0.1:2100/v1/wallets \
-  -H "Authorization: Bearer lws_a1b2c3d4e5f6..."</pre>
-      <p>Because the API binds to <code>127.0.0.1</code> only, it is inaccessible from other machines. The token provides defense-in-depth against local privilege escalation and browser-based attacks (CSRF).</p>
+  -H "Authorization: Bearer lws_key_a1b2c3d4e5f6..."</pre>
+      <p><strong>Owner access:</strong> The owner authenticates via a passphrase-based session token. Owner requests bypass all policy evaluation and can access all wallets and key management endpoints.</p>
+<pre># Unlock the vault and get a session token
+curl -X POST http://127.0.0.1:2100/v1/auth/unlock \
+  -d '{"passphrase": "..."}'
+# => { "sessionToken": "lws_session_..." }
+
+curl -H "Authorization: Bearer lws_session_..." \
+  http://127.0.0.1:2100/v1/keys</pre>
+      <p>API keys use the <code>lws_key_</code> prefix. The raw token is shown once at creation and never stored &mdash; only its SHA-256 hash is persisted. Because the API binds to <code>127.0.0.1</code> only, it is inaccessible from other machines.</p>
 
       <h2>Library SDK</h2>
       <p>For direct integration, LWS provides a TypeScript/JavaScript SDK that communicates with the signing enclave in-process.</p>
@@ -426,7 +424,7 @@ await lws.lock("agent-treasury");</pre>
       </table>
 
       <h2>Agent Interaction Example</h2>
-      <p>Here is a step-by-step walkthrough of an AI agent sending ETH via the MCP interface.</p>
+      <p>Here is a step-by-step walkthrough of an AI agent sending ETH via the MCP interface, authenticated with an API key scoped to specific wallets and policies.</p>
 
       <h3>Step 1: List Wallets</h3>
       <p>The agent discovers available wallets by calling <code>lws_list_wallets</code>:</p>

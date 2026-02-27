@@ -106,7 +106,7 @@
           <span class="principle-number">03</span>
           <div>
             <h3>Policy before signing</h3>
-            <p>Every transaction passes through a policy engine before key material is touched. Spending limits, contract allowlists, mandatory simulation&mdash;enforced at the vault level, not the app level.</p>
+            <p>Every agent transaction passes through a policy engine before key material is touched. Policies are attached to API keys, scoping what each agent can do. The owner bypasses policies entirely&mdash;sudo access to all wallets.</p>
           </div>
         </div>
         <div class="principle">
@@ -236,7 +236,7 @@
     <span class="section-label">Get Started</span>
     <h2 class="section-title">From zero to signing in 60 seconds</h2>
     <p class="section-description">
-      Install the CLI, create a wallet, attach a policy, and start signing. Works with any agent that supports MCP.
+      Install the CLI, create a wallet, create an API key with policies, and start signing. Works with any agent that supports MCP.
     </p>
 
     <div class="code-block-wrapper" style="max-width: 100%;">
@@ -252,11 +252,10 @@ npm install -g @lws/cli
 lws wallet create --name "agent-treasury" --chain evm
 <span class="comment"># => Created wallet 3198bc9c-... with account eip155:8453:0xab16...</span>
 
-<span class="comment"># Attach a safety policy</span>
-lws policy create --name "safe-agent" \
-  --rule <span class="string">'max_value:eip155:8453:native:1.0:daily'</span> \
-  --rule <span class="string">'require_simulation'</span>
-lws policy attach --wallet agent-treasury --policy safe-agent
+<span class="comment"># Create a policy and an API key scoped to the wallet</span>
+lws policy create --file <span class="string">safe-agent-policy.json</span>
+lws key create --name <span class="string">"claude-agent"</span> --wallet agent-treasury --policy safe-agent
+<span class="comment"># => lws_key_a1b2c3d4e5f6...  (shown once, store securely)</span>
 
 <span class="comment"># Start the MCP server (agents connect here)</span>
 lws serve --mcp

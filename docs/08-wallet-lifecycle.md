@@ -223,7 +223,7 @@ Deletion:
 1. Verifies the wallet exists
 2. Prompts for confirmation (unless `--confirm` is passed)
 3. Securely overwrites the wallet file with random bytes before unlinking (to prevent recovery from disk)
-4. Removes the wallet ID from any attached policy references
+4. Removes the wallet ID from the `wallet_ids` array of all API keys that reference it
 5. Logs the deletion to the audit log
 
 ## Key Rotation

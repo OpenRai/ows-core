@@ -46,7 +46,7 @@ List all wallets in the vault (no sensitive data exposed).
 }
 ```
 
-**Returns:** Array of `WalletDescriptor` objects (id, name, accounts, policies — never key material).
+**Returns:** Array of `WalletDescriptor` objects (id, name, accounts — never key material). If the caller is an API key, only wallets in the key's `walletIds` scope are returned.
 
 ### `lws_get_balance`
 
@@ -160,32 +160,30 @@ Simulate a transaction without signing.
 
 ### `lws_get_policy`
 
-View the policy attached to a wallet.
+View the policies attached to the caller's API key. Returns policy metadata (name, executable path, config) for each attached policy. If the caller is the owner (sudo), returns an empty array (no policies are evaluated for owners).
 
 ```json
 {
   "name": "lws_get_policy",
-  "description": "Get the policy rules attached to a wallet",
+  "description": "Get the policies attached to the caller's API key (name, executable, config). Returns empty for owner access.",
   "inputSchema": {
     "type": "object",
-    "properties": {
-      "walletId": { "type": "string" }
-    },
-    "required": ["walletId"]
+    "properties": {},
+    "required": []
   }
 }
 ```
 
 ## MCP Server Configuration
 
-Agents configure the LWS MCP server in their MCP settings:
+Agents configure the LWS MCP server in their MCP settings. The MCP server can be scoped to an API key via `--key` or the `LWS_API_KEY` environment variable. If no key is provided, the MCP server requires passphrase unlock and operates in owner (sudo) mode.
 
 ```json
 {
   "mcpServers": {
     "lws": {
       "command": "lws",
-      "args": ["serve", "--mcp"],
+      "args": ["serve", "--mcp", "--key", "lws_key_a1b2c3d4e5f6..."],
       "env": {
         "LWS_VAULT_PATH": "~/.lws"
       }
@@ -194,7 +192,23 @@ Agents configure the LWS MCP server in their MCP settings:
 }
 ```
 
-Or for Claude Code specifically, in `~/.claude/claude_code_config.json`:
+Or using the environment variable:
+
+```json
+{
+  "mcpServers": {
+    "lws": {
+      "command": "lws",
+      "args": ["serve", "--mcp"],
+      "env": {
+        "LWS_API_KEY": "lws_key_a1b2c3d4e5f6..."
+      }
+    }
+  }
+}
+```
+
+For owner (sudo) access — no API key, requires passphrase:
 
 ```json
 {
@@ -212,7 +226,7 @@ Or for Claude Code specifically, in `~/.claude/claude_code_config.json`:
 For non-MCP consumers (web apps, custom scripts, other services), LWS exposes a REST API on `localhost`:
 
 ```
-POST /v1/wallets                     → Create wallet
+POST /v1/wallets                     → Create wallet (owner only)
 GET  /v1/wallets                     → List wallets
 GET  /v1/wallets/:id                 → Get wallet descriptor
 POST /v1/wallets/:id/sign            → Sign transaction
@@ -220,9 +234,12 @@ POST /v1/wallets/:id/sign-and-send   → Sign and broadcast
 POST /v1/wallets/:id/sign-message    → Sign message
 POST /v1/wallets/:id/simulate        → Simulate transaction
 GET  /v1/wallets/:id/balance         → Get balance
-GET  /v1/wallets/:id/policy          → Get attached policy
-POST /v1/wallets/:id/policy          → Attach policy
-DELETE /v1/wallets/:id/policy        → Detach policy
+GET  /v1/wallets/:id/policy          → Get caller's policies
+
+POST   /v1/keys                      → Create API key (owner only)
+GET    /v1/keys                      → List API keys (owner only)
+GET    /v1/keys/:id                  → Get key details (owner only)
+DELETE /v1/keys/:id                  → Revoke key (owner only)
 ```
 
 ### Security: Localhost Only
@@ -231,23 +248,28 @@ The REST API MUST bind to `127.0.0.1` only. It MUST NOT be exposed on `0.0.0.0` 
 
 ### Authentication
 
-The REST API uses a bearer token stored in `~/.lws/config.json`:
+The REST API supports two authentication modes:
 
-```json
-{
-  "api": {
-    "port": 8402,
-    "token": "lws_tok_a1b2c3d4e5f6..."
-  }
-}
-```
+**API key (agent access):** Agents authenticate with an API key prefixed `lws_key_`. The key is scoped to specific wallets and has policies attached. Requests to wallets outside the key's scope return `403`.
 
 ```bash
-curl -H "Authorization: Bearer lws_tok_a1b2c3d4e5f6..." \
+curl -H "Authorization: Bearer lws_key_a1b2c3d4e5f6..." \
   http://127.0.0.1:8402/v1/wallets
 ```
 
-The token is generated at first startup and stored with `0600` permissions. It provides defense against local privilege escalation (another process on the same machine cannot access wallets without the token).
+**Owner access:** The owner authenticates via a passphrase-based session token or root token. Owner requests bypass all policy evaluation and can access all wallets and key management endpoints.
+
+```bash
+# Unlock the vault and get a session token
+curl -X POST http://127.0.0.1:8402/v1/auth/unlock \
+  -d '{"passphrase": "..."}'
+# => { "sessionToken": "lws_session_..." }
+
+curl -H "Authorization: Bearer lws_session_..." \
+  http://127.0.0.1:8402/v1/keys
+```
+
+API keys use the `lws_key_` prefix. The raw token is shown once at creation and never stored — only its SHA-256 hash is persisted in the key file. Key management endpoints (`/v1/keys/*`) are restricted to owner access.
 
 ## Library SDK
 
@@ -285,13 +307,14 @@ When used as a library, the signing enclave runs as a worker thread (not a subpr
 
 ## Agent Interaction Example
 
-Here's how an AI agent interacts with LWS through MCP:
+Here's how an AI agent interacts with LWS through MCP using an API key. The MCP server was started with `--key lws_key_a1b2c3d4e5f6...`, scoping the agent to specific wallets and policies.
 
 ```
 Agent: "I need to send 0.01 ETH to 0x4B08... on Base"
 
 1. Agent calls lws_list_wallets to find available wallets
-   → Returns: [{ id: "3198bc9c-...", name: "agent-treasury", ... }]
+   → Returns only wallets in the API key's scope
+   → [{ id: "3198bc9c-...", name: "agent-treasury", ... }]
 
 2. Agent calls lws_get_balance to check funds
    → Returns: { native: "50000000000000000", ... }  (0.05 ETH)
@@ -300,13 +323,14 @@ Agent: "I need to send 0.01 ETH to 0x4B08... on Base"
    → Returns: { success: true, gasEstimate: "21000", stateChanges: [...] }
 
 4. Agent calls lws_sign_and_send to execute
-   → Policy engine evaluates (spending limit, allowlist, simulation)
+   → API key verified: wallet is in key's scope
+   → Policy engine evaluates the API key's attached policies
    → Signing enclave decrypts key, signs, wipes
    → Transaction broadcast to Base RPC
    → Returns: { transactionHash: "0xabc...", status: "confirmed" }
 ```
 
-At no point does the agent see the private key. The MCP tool descriptions tell the agent what operations are available, and the policy engine constrains what operations are permitted.
+At no point does the agent see the private key. The API key determines which wallets the agent can access, and the policies attached to the key constrain what operations are permitted.
 
 ## References
 

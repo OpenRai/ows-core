@@ -156,14 +156,13 @@ solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp:native</pre>
 //   }
 // ]</pre>
 
-      <h3>Policy Rules</h3>
-<pre>const policy: PolicyRule = {
-  type: "chain_restriction",
-  allowedChains: [
-    "eip155:8453",                   // Base
-    "eip155:1",                      // Ethereum mainnet
-    "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp"  // Solana mainnet
-  ]
+      <h3>Policy Context</h3>
+<pre>// PolicyContext uses CAIP-2 chain identifiers
+const context: PolicyContext = {
+  transaction: { to: "0x...", value: "1000000000000000000" },
+  chainId: "eip155:8453",           // CAIP-2
+  wallet: { /* ... */ },
+  timestamp: new Date().toISOString()
 };</pre>
 
       <h2>Shorthand Aliases</h2>

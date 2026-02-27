@@ -67,6 +67,9 @@
 ├── wallets/
 │   ├── &lt;wallet-id&gt;.json      # Encrypted wallet file
 │   └── ...
+├── keys/
+│   ├── &lt;key-id&gt;.json         # API key definition
+│   └── ...
 ├── policies/
 │   ├── &lt;policy-id&gt;.json      # Policy definition
 │   └── ...
@@ -83,6 +86,8 @@
 <pre>~/.lws/                  drwx------  (700)
 ~/.lws/wallets/          drwx------  (700)
 ~/.lws/wallets/*.json    -rw-------  (600)
+~/.lws/keys/             drwx------  (700)
+~/.lws/keys/*.json       -rw-------  (600)
 ~/.lws/policies/         drwxr-xr-x  (755)
 ~/.lws/config.json       -rw-------  (600)
 ~/.lws/logs/audit.jsonl  -rw-------  (600)</pre>
@@ -104,7 +109,6 @@
       "derivation_path": "m/44'/60'/0'/0/0"
     }
   ],
-  "policy_ids": ["spending-limit-01"],
   "crypto": {
     "cipher": "aes-256-gcm",
     "cipherparams": {

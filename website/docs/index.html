@@ -79,7 +79,6 @@ interface WalletDescriptor {
   createdAt: string;                 // ISO 8601
   chainType: ChainType;
   accounts: AccountDescriptor[];
-  policyIds: string[];
   metadata: Record&lt;string, unknown&gt;;
 }
 
@@ -88,6 +87,18 @@ interface AccountDescriptor {
   address: string;                   // chain-native
   derivationPath: string;            // BIP-44 path
   chainId: ChainId;                  // CAIP-2
+}
+
+// === API Keys ===
+
+interface ApiKey {
+  id: string;                        // UUID v4
+  name: string;                      // human-readable label
+  tokenHash: string;                 // SHA-256 of raw token
+  createdAt: string;                 // ISO 8601
+  walletIds: WalletId[];             // wallets this key can access
+  policyIds: string[];               // policies evaluated per request
+  expiresAt?: string;                // optional expiry
 }</pre>
 
 <pre>// === Operations ===
@@ -116,22 +127,24 @@ interface SignMessageRequest {
 interface Policy {
   id: string;
   name: string;
-  rules: PolicyRule[];
+  executable: string;                  // absolute path to policy executable
+  config?: Record&lt;string, unknown&gt;;    // static config passed to executable
   action: "deny" | "warn";
 }
 
-type PolicyRule =
-  | { type: "max_value"; chainId: ChainId; asset: string;
-      maxAmount: string; period?: Duration }
-  | { type: "allowlist"; addresses: string[] }
-  | { type: "denylist"; addresses: string[] }
-  | { type: "chain_restriction"; allowedChains: ChainId[] }
-  | { type: "contract_allowlist"; contracts: string[] }
-  | { type: "require_simulation" }
-  | { type: "time_restriction";
-      allowedHours: { start: number; end: number;
-                      timezone: string } }
-  | { type: "custom"; evaluator: string };</pre>
+interface PolicyContext {
+  transaction: SerializedTransaction;
+  chainId: ChainId;
+  wallet: WalletDescriptor;
+  simulation?: SimulationResult;
+  timestamp: string;
+  apiKeyId: string;                  // the API key making this request
+}
+
+interface PolicyResult {
+  allow: boolean;
+  reason?: string;
+}</pre>
 
       <h2>Specification Documents</h2>
       <table>

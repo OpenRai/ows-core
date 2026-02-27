@@ -27,6 +27,9 @@ The Ethereum Keystore v3 format has been battle-tested since 2015, is implemente
 ├── wallets/
 │   ├── <wallet-id>.json           # Encrypted wallet file (one per wallet)
 │   └── ...
+├── keys/
+│   ├── <key-id>.json              # API key definition (one per key)
+│   └── ...
 ├── policies/
 │   ├── <policy-id>.json           # Policy definition
 │   └── ...
@@ -46,6 +49,8 @@ The Ethereum Keystore v3 format has been battle-tested since 2015, is implemente
 ~/.lws/                  drwx------  (700)
 ~/.lws/wallets/          drwx------  (700)
 ~/.lws/wallets/*.json    -rw-------  (600)
+~/.lws/keys/             drwx------  (700)
+~/.lws/keys/*.json       -rw-------  (600)
 ~/.lws/policies/         drwxr-xr-x  (755)
 ~/.lws/config.json       -rw-------  (600)
 ~/.lws/logs/audit.jsonl  -rw-------  (600)
@@ -72,7 +77,6 @@ Each wallet is stored as a single JSON file extending the Ethereum Keystore v3 s
       "derivation_path": "m/44'/60'/0'/0/0"
     }
   ],
-  "policy_ids": ["spending-limit-01"],
   "crypto": {
     "cipher": "aes-256-gcm",
     "cipherparams": {
@@ -104,10 +108,39 @@ Each wallet is stored as a single JSON file extending the Ethereum Keystore v3 s
 | `created_at` | string | yes | ISO 8601 creation timestamp |
 | `chain_type` | string | yes | Primary chain type: `evm`, `solana`, `tron`, `cosmos`, `bitcoin` |
 | `accounts` | array | yes | Derived accounts (see Account object) |
-| `policy_ids` | array | no | Attached policy IDs |
 | `crypto` | object | yes | Encryption parameters (see Crypto object) |
 | `key_type` | string | yes | `mnemonic` (BIP-39) or `private_key` (raw) |
 | `metadata` | object | no | Extensible metadata |
+
+## API Key File Format
+
+Each API key is stored as a JSON file in `~/.lws/keys/`:
+
+```json
+{
+  "id": "7a2f1b3c-4d5e-6f7a-8b9c-0d1e2f3a4b5c",
+  "name": "claude-agent",
+  "token_hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "created_at": "2026-02-27T10:30:00Z",
+  "wallet_ids": ["3198bc9c-6672-5ab3-d995-4942343ae5b6"],
+  "policy_ids": ["spending-limit-01", "safe-agent-policy"],
+  "expires_at": null
+}
+```
+
+### Field Definitions
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `id` | string | yes | UUID v4 key identifier |
+| `name` | string | yes | Human-readable label for the key |
+| `token_hash` | string | yes | SHA-256 hex digest of the raw token. The raw token (`lws_key_...`) is shown once at creation and never stored. |
+| `created_at` | string | yes | ISO 8601 creation timestamp |
+| `wallet_ids` | array | yes | Wallet IDs this key is authorized to access |
+| `policy_ids` | array | yes | Policy IDs evaluated on every request made with this key |
+| `expires_at` | string | no | ISO 8601 expiry timestamp. `null` means no expiry. |
+
+The `keys/` directory and its contents use the same strict permissions as `wallets/` (`700` for the directory, `600` for files) because the `token_hash` must be protected against local reads.
 
 ### Crypto Object
 

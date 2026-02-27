@@ -46,11 +46,13 @@ interface SignResult {
 1. Resolve `walletId` → wallet file
 2. Resolve `chainId` → chain plugin
 3. If `simulate !== false`, run simulation via chain plugin
-4. Evaluate policies against the transaction + simulation result
-5. If policies pass, decrypt key material in the signing enclave
-6. Sign via chain plugin's signer
-7. Wipe key material
-8. Return signed transaction
+4. Authenticate caller: owner (passphrase/passkey) or agent (API key)
+5. If agent: verify wallet is in API key's `walletIds` scope; evaluate API key's policies against the transaction + simulation result
+6. If owner: skip policy evaluation (sudo access)
+7. If policies pass (or owner), decrypt key material in the signing enclave
+8. Sign via chain plugin's signer
+9. Wipe key material
+10. Return signed transaction
 
 ### `signAndSend(request: SignAndSendRequest): Promise<SignAndSendResult>`
 

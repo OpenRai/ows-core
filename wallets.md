@@ -14,7 +14,7 @@ As AI agents become first-class participants in blockchain ecosystems — execut
 
 2. **Chain-agnostic by default.** The standard uses [CAIP-2](https://chainagnostic.org/CAIPs/caip-2) chain identifiers and [CAIP-10](https://chainagnostic.org/CAIPs/caip-10) account identifiers. EVM, Solana, Tron, Cosmos, Bitcoin, and any future chain are first-class citizens.
 
-3. **Policy before signing.** Every transaction passes through a policy engine before key material is touched. Policies can enforce spending limits, allowlisted contracts, chain restrictions, and simulation requirements.
+3. **Policy before signing.** Every agent transaction passes through a policy engine before key material is touched. Policies are attached to API keys (not wallets), scoping what each agent is allowed to do. The wallet owner bypasses policies entirely — if they want self-imposed limits, they create an API key for themselves.
 
 4. **One interface, any consumer.** CLI tools, MCP servers, REST APIs, and direct library calls all use the same abstract interface. A wallet created by one tool is usable by any other.
 
@@ -35,7 +35,7 @@ As AI agents become first-class participants in blockchain ecosystems — execut
 │                     │            │                    │
 │  ┌──────────────────┴────────────┴────────────────┐ │
 │  │              Policy Engine                      │ │
-│  │  (simulation, spending limits, allowlists)      │ │
+│  │  (executable-based policy evaluation)           │ │
 │  └──────────────────┬─────────────────────────────┘ │
 │                     │                                │
 │  ┌──────────────────▼─────────────────────────────┐ │
@@ -46,6 +46,7 @@ As AI agents become first-class participants in blockchain ecosystems — execut
 │  ┌──────────────────▼─────────────────────────────┐ │
 │  │              Wallet Vault (filesystem)           │ │
 │  │  ~/.lws/wallets/*.json                          │ │
+│  │  ~/.lws/keys/*.json    (API keys)               │ │
 │  │  ~/.lws/policies/*.json                         │ │
 │  │  ~/.lws/config.json                             │ │
 │  └─────────────────────────────────────────────────┘ │
@@ -91,7 +92,6 @@ interface WalletDescriptor {
   createdAt: string;                    // ISO 8601
   chainType: ChainType;                 // "evm" | "solana" | "tron" | "cosmos" | "bitcoin" | ...
   accounts: AccountDescriptor[];
-  policyIds: string[];
   metadata: Record<string, unknown>;    // extensible
 }
 
@@ -100,6 +100,18 @@ interface AccountDescriptor {
   address: string;                      // chain-native address
   derivationPath: string;              // BIP-44 path, e.g. "m/44'/60'/0'/0/0"
   chainId: ChainId;                    // CAIP-2
+}
+
+// === API Keys ===
+
+interface ApiKey {
+  id: string;                           // UUID v4
+  name: string;                         // human-readable label
+  tokenHash: string;                    // SHA-256 of the raw token (never store raw)
+  createdAt: string;                    // ISO 8601
+  walletIds: WalletId[];                // wallets this key can access
+  policyIds: string[];                  // policies evaluated on every request
+  expiresAt?: string;                   // ISO 8601 optional expiry
 }
 
 // === Operations ===
@@ -163,21 +175,24 @@ interface StateChange {
 interface Policy {
   id: string;
   name: string;
-  rules: PolicyRule[];
+  executable: string;                  // absolute path to policy executable
+  config?: Record<string, unknown>;    // static config passed to executable via PolicyContext
   action: "deny" | "warn";            // deny = block tx, warn = log but allow
 }
 
-type PolicyRule =
-  | { type: "max_value"; chainId: ChainId; asset: string; maxAmount: string; period?: Duration }
-  | { type: "allowlist"; addresses: string[] }
-  | { type: "denylist"; addresses: string[] }
-  | { type: "chain_restriction"; allowedChains: ChainId[] }
-  | { type: "contract_allowlist"; contracts: string[] }
-  | { type: "require_simulation" }
-  | { type: "time_restriction"; allowedHours: { start: number; end: number; timezone: string } }
-  | { type: "custom"; evaluator: string };    // path to custom evaluator module
+interface PolicyContext {
+  transaction: SerializedTransaction;  // the transaction being evaluated
+  chainId: ChainId;                    // CAIP-2 chain identifier
+  wallet: WalletDescriptor;            // wallet descriptor (never key material)
+  simulation?: SimulationResult;       // simulation result, if available
+  timestamp: string;                   // ISO 8601 timestamp of signing request
+  apiKeyId: string;                    // the API key making this request
+}
 
-type Duration = "per_tx" | "hourly" | "daily" | "weekly" | "monthly";
+interface PolicyResult {
+  allow: boolean;                      // true = permit, false = deny
+  reason?: string;                     // human-readable explanation
+}
 ```
 
 ## Quick Start
@@ -192,17 +207,18 @@ lws wallet create --name "agent-treasury" --chain evm
 # List wallets
 lws wallet list
 
-# Attach a policy
-lws policy create --name "safe-agent" \
-  --rule 'max_value:eip155:8453:native:1.0:daily' \
-  --rule 'require_simulation'
-lws policy attach --wallet agent-treasury --policy safe-agent
+# Create a policy (policy JSON references an executable)
+lws policy create --file safe-agent-policy.json
+
+# Create an API key scoped to a wallet and policy
+lws key create --name "claude-agent" --wallet agent-treasury --policy safe-agent
+# => lws_key_a1b2c3d4e5f6...  (shown once, store securely)
 
 # Sign a transaction (from any tool that speaks LWS)
 lws tx sign --wallet agent-treasury --chain eip155:8453 --tx <serialized_tx>
 
-# Start the MCP server (for agent access)
-lws serve --mcp
+# Start the MCP server (for agent access via API key)
+lws serve --mcp --key lws_key_a1b2c3d4e5f6...
 
 # Start the REST API (for programmatic access)
 lws serve --rest --port 8402
