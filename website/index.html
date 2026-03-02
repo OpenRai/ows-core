@@ -57,6 +57,28 @@
       <a href="#quickstart" class="btn btn-outline btn-large">Quick Start</a>
     </div>
 
+    <!-- Install -->
+    <div class="install-section">
+      <div class="install-label">Install</div>
+      <div class="install-options">
+        <div class="install-option">
+          <div class="install-method">npm</div>
+          <div class="install-command-wrapper">
+            <code class="install-command">npm install -g @lws/cli</code>
+            <button class="install-copy" onclick="navigator.clipboard.writeText('npm install -g @lws/cli')">Copy</button>
+          </div>
+        </div>
+        <div class="install-divider">or</div>
+        <div class="install-option">
+          <div class="install-method">curl</div>
+          <div class="install-command-wrapper">
+            <code class="install-command">curl -sSf https://openwallet.sh | bash</code>
+            <button class="install-copy" onclick="navigator.clipboard.writeText('curl -sSf https://openwallet.sh | bash')">Copy</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
     <!-- Code Example -->
     <div class="code-block-wrapper" style="margin-top: 3rem;">
       <div class="code-block-header">
@@ -318,13 +340,7 @@
         <button class="code-block-copy" onclick="copyCode(this)">Copy</button>
       </div>
       <div class="code-block">
-<pre><span class="comment"># Install (one-liner)</span>
-curl -sSf https://raw.githubusercontent.com/dawnlabsai/lws/main/lws/install.sh | bash
-
-<span class="comment"># Or install via npm</span>
-npm install -g @lws/cli
-
-<span class="comment"># Create a wallet</span>
+<pre><span class="comment"># Create a wallet</span>
 lws wallet create --name "agent-treasury" --chain evm
 <span class="comment"># => Created wallet 3198bc9c-... with account eip155:8453:0xab16...</span>
 

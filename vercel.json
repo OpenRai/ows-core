@@ -1,5 +1,16 @@
 {
   "framework": null,
-  "buildCommand": "mkdir -p website/docs/md && cp docs/*.md website/docs/md/",
-  "outputDirectory": "website"
+  "buildCommand": "mkdir -p website/docs/md && cp docs/*.md website/docs/md/ && cp lws/install.sh website/install.sh",
+  "outputDirectory": "website",
+  "headers": [
+    {
+      "source": "/install.sh",
+      "headers": [
+        {
+          "key": "Content-Type",
+          "value": "text/x-shellscript; charset=utf-8"
+        }
+      ]
+    }
+  ]
 }
