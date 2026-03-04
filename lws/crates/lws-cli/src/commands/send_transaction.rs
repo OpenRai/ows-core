@@ -24,18 +24,18 @@ pub fn run(
     let tx_bytes = hex::decode(tx_hex_clean)
         .map_err(|e| CliError::InvalidArgs(format!("invalid hex transaction: {e}")))?;
 
-    let signer = signer_for_chain(chain);
+    let signer = signer_for_chain(chain.chain_type);
     let path = signer.default_derivation_path(index);
     let curve = signer.curve();
 
     let key = HdDeriver::derive_from_mnemonic_cached(&mnemonic, "", &path, curve)?;
     let output = signer.sign_transaction(key.expose(), &tx_bytes)?;
 
-    // 2. Resolve RPC URL
-    let rpc_url = resolve_rpc_url(chain, rpc_url_override)?;
+    // 2. Resolve RPC URL using exact chain_id
+    let rpc_url = resolve_rpc_url(chain.chain_id, chain.chain_type, rpc_url_override)?;
 
     // 3. Broadcast
-    let tx_hash = broadcast(chain, &rpc_url, &output.signature)?;
+    let tx_hash = broadcast(chain.chain_type, &rpc_url, &output.signature)?;
 
     // 4. Output
     if json_output {
@@ -56,8 +56,8 @@ pub fn run(
     Ok(())
 }
 
-/// Resolve the RPC URL: CLI flag > config override > built-in default.
-fn resolve_rpc_url(chain: ChainType, flag: Option<&str>) -> Result<String, CliError> {
+/// Resolve the RPC URL: CLI flag > config override (exact chain_id) > config (namespace) > built-in default.
+fn resolve_rpc_url(chain_id: &str, chain_type: ChainType, flag: Option<&str>) -> Result<String, CliError> {
     if let Some(url) = flag {
         return Ok(url.to_string());
     }
@@ -65,17 +65,21 @@ fn resolve_rpc_url(chain: ChainType, flag: Option<&str>) -> Result<String, CliEr
     let config = Config::load_or_default();
     let defaults = Config::default_rpc();
 
-    // Find the first matching RPC by chain namespace
-    let namespace = chain.namespace();
+    // Try exact chain_id match first
+    if let Some(url) = config.rpc.get(chain_id) {
+        return Ok(url.clone());
+    }
+    if let Some(url) = defaults.get(chain_id) {
+        return Ok(url.clone());
+    }
 
-    // Try config (which includes defaults merged with overrides)
+    // Fallback to namespace match
+    let namespace = chain_type.namespace();
     for (key, url) in &config.rpc {
         if key.starts_with(namespace) {
             return Ok(url.clone());
         }
     }
-
-    // Try built-in defaults
     for (key, url) in &defaults {
         if key.starts_with(namespace) {
             return Ok(url.clone());
@@ -84,7 +88,7 @@ fn resolve_rpc_url(chain: ChainType, flag: Option<&str>) -> Result<String, CliEr
 
     Err(CliError::InvalidArgs(format!(
         "no RPC URL configured for chain '{}' — use --rpc-url or add to ~/.lws/config.json",
-        chain
+        chain_id
     )))
 }
 

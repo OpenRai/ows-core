@@ -10,14 +10,20 @@ fn map_err(e: lws_lib::LwsLibError) -> napi::Error {
     napi::Error::from_reason(e.to_string())
 }
 
+/// A single account within a wallet (one per chain family).
+#[napi(object)]
+pub struct AccountInfo {
+    pub chain_id: String,
+    pub address: String,
+    pub derivation_path: String,
+}
+
 /// Wallet information returned by create/import/list/get operations.
 #[napi(object)]
 pub struct WalletInfo {
     pub id: String,
     pub name: String,
-    pub chain: String,
-    pub address: String,
-    pub derivation_path: String,
+    pub accounts: Vec<AccountInfo>,
     pub created_at: String,
 }
 
@@ -26,9 +32,15 @@ impl From<lws_lib::WalletInfo> for WalletInfo {
         WalletInfo {
             id: w.id,
             name: w.name,
-            chain: w.chain.to_string(),
-            address: w.address,
-            derivation_path: w.derivation_path,
+            accounts: w
+                .accounts
+                .into_iter()
+                .map(|a| AccountInfo {
+                    chain_id: a.chain_id,
+                    address: a.address,
+                    derivation_path: a.derivation_path,
+                })
+                .collect(),
             created_at: w.created_at,
         }
     }
@@ -63,18 +75,16 @@ pub fn derive_address(
     lws_lib::derive_address(&mnemonic, &chain, index).map_err(map_err)
 }
 
-/// Create a new wallet (generates mnemonic, encrypts, saves to vault).
+/// Create a new universal wallet (derives addresses for all chains).
 #[napi]
 pub fn create_wallet(
     name: String,
-    chain: String,
     passphrase: Option<String>,
     words: Option<u32>,
     vault_path_opt: Option<String>,
 ) -> Result<WalletInfo> {
     lws_lib::create_wallet(
         &name,
-        &chain,
         words,
         passphrase.as_deref(),
         vault_path(vault_path_opt).as_deref(),
@@ -83,11 +93,10 @@ pub fn create_wallet(
     .map_err(map_err)
 }
 
-/// Import a wallet from a mnemonic phrase.
+/// Import a wallet from a mnemonic phrase (derives addresses for all chains).
 #[napi]
 pub fn import_wallet_mnemonic(
     name: String,
-    chain: String,
     mnemonic: String,
     passphrase: Option<String>,
     index: Option<u32>,
@@ -95,7 +104,6 @@ pub fn import_wallet_mnemonic(
 ) -> Result<WalletInfo> {
     lws_lib::import_wallet_mnemonic(
         &name,
-        &chain,
         &mnemonic,
         passphrase.as_deref(),
         index,
@@ -105,18 +113,16 @@ pub fn import_wallet_mnemonic(
     .map_err(map_err)
 }
 
-/// Import a wallet from a hex-encoded private key.
+/// Import a wallet from a hex-encoded private key (derives addresses for all chains).
 #[napi]
 pub fn import_wallet_private_key(
     name: String,
-    chain: String,
     private_key_hex: String,
     passphrase: Option<String>,
     vault_path_opt: Option<String>,
 ) -> Result<WalletInfo> {
     lws_lib::import_wallet_private_key(
         &name,
-        &chain,
         &private_key_hex,
         passphrase.as_deref(),
         vault_path(vault_path_opt).as_deref(),

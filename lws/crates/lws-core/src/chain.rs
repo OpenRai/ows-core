@@ -12,6 +12,72 @@ pub enum ChainType {
     Tron,
 }
 
+/// All supported chain families, used for universal wallet derivation.
+pub const ALL_CHAIN_TYPES: [ChainType; 5] = [
+    ChainType::Evm,
+    ChainType::Solana,
+    ChainType::Bitcoin,
+    ChainType::Cosmos,
+    ChainType::Tron,
+];
+
+/// A specific chain (e.g. "ethereum", "arbitrum") with its family type and CAIP-2 ID.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Chain {
+    pub name: &'static str,
+    pub chain_type: ChainType,
+    pub chain_id: &'static str,
+}
+
+/// Known chains registry.
+pub const KNOWN_CHAINS: &[Chain] = &[
+    Chain { name: "ethereum",  chain_type: ChainType::Evm,     chain_id: "eip155:1" },
+    Chain { name: "polygon",   chain_type: ChainType::Evm,     chain_id: "eip155:137" },
+    Chain { name: "arbitrum",  chain_type: ChainType::Evm,     chain_id: "eip155:42161" },
+    Chain { name: "optimism",  chain_type: ChainType::Evm,     chain_id: "eip155:10" },
+    Chain { name: "base",      chain_type: ChainType::Evm,     chain_id: "eip155:8453" },
+    Chain { name: "bsc",       chain_type: ChainType::Evm,     chain_id: "eip155:56" },
+    Chain { name: "avalanche", chain_type: ChainType::Evm,     chain_id: "eip155:43114" },
+    Chain { name: "solana",    chain_type: ChainType::Solana,  chain_id: "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp" },
+    Chain { name: "bitcoin",   chain_type: ChainType::Bitcoin, chain_id: "bip122:000000000019d6689c085ae165831e93" },
+    Chain { name: "cosmos",    chain_type: ChainType::Cosmos,  chain_id: "cosmos:cosmoshub-4" },
+    Chain { name: "tron",      chain_type: ChainType::Tron,    chain_id: "tron:mainnet" },
+];
+
+/// Parse a chain string into a `Chain`. Accepts:
+/// - Friendly names: "ethereum", "arbitrum", "solana", etc.
+/// - CAIP-2 chain IDs: "eip155:1", "eip155:42161", etc.
+/// - Legacy family names for backward compat: "evm" → resolves to ethereum
+pub fn parse_chain(s: &str) -> Result<Chain, String> {
+    let lower = s.to_lowercase();
+
+    // Legacy family name backward compat
+    let lookup = match lower.as_str() {
+        "evm" => "ethereum",
+        _ => &lower,
+    };
+
+    // Try friendly name match
+    if let Some(chain) = KNOWN_CHAINS.iter().find(|c| c.name == lookup) {
+        return Ok(*chain);
+    }
+
+    // Try CAIP-2 chain ID match
+    if let Some(chain) = KNOWN_CHAINS.iter().find(|c| c.chain_id == s) {
+        return Ok(*chain);
+    }
+
+    Err(format!(
+        "unknown chain: '{}'. Use a chain name (ethereum, solana, bitcoin, ...) or CAIP-2 ID (eip155:1, ...)",
+        s
+    ))
+}
+
+/// Returns the default `Chain` for a given `ChainType` (first match in registry).
+pub fn default_chain_for_type(ct: ChainType) -> Chain {
+    *KNOWN_CHAINS.iter().find(|c| c.chain_type == ct).unwrap()
+}
+
 impl ChainType {
     /// Returns the CAIP-2 namespace for this chain type.
     pub fn namespace(&self) -> &'static str {
@@ -147,5 +213,50 @@ mod tests {
     fn test_display() {
         assert_eq!(ChainType::Evm.to_string(), "evm");
         assert_eq!(ChainType::Bitcoin.to_string(), "bitcoin");
+    }
+
+    #[test]
+    fn test_parse_chain_friendly_name() {
+        let chain = parse_chain("ethereum").unwrap();
+        assert_eq!(chain.name, "ethereum");
+        assert_eq!(chain.chain_type, ChainType::Evm);
+        assert_eq!(chain.chain_id, "eip155:1");
+    }
+
+    #[test]
+    fn test_parse_chain_caip2() {
+        let chain = parse_chain("eip155:42161").unwrap();
+        assert_eq!(chain.name, "arbitrum");
+        assert_eq!(chain.chain_type, ChainType::Evm);
+    }
+
+    #[test]
+    fn test_parse_chain_legacy_evm() {
+        let chain = parse_chain("evm").unwrap();
+        assert_eq!(chain.name, "ethereum");
+        assert_eq!(chain.chain_type, ChainType::Evm);
+    }
+
+    #[test]
+    fn test_parse_chain_solana() {
+        let chain = parse_chain("solana").unwrap();
+        assert_eq!(chain.chain_type, ChainType::Solana);
+    }
+
+    #[test]
+    fn test_parse_chain_unknown() {
+        assert!(parse_chain("unknown_chain").is_err());
+    }
+
+    #[test]
+    fn test_all_chain_types() {
+        assert_eq!(ALL_CHAIN_TYPES.len(), 5);
+    }
+
+    #[test]
+    fn test_default_chain_for_type() {
+        let chain = default_chain_for_type(ChainType::Evm);
+        assert_eq!(chain.name, "ethereum");
+        assert_eq!(chain.chain_id, "eip155:1");
     }
 }

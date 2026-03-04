@@ -168,7 +168,7 @@ pub fn wallet_name_exists(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use lws_core::{ChainType, KeyType, WalletAccount};
+    use lws_core::{KeyType, WalletAccount};
 
     #[test]
     fn test_wallets_dir_creates_directory() {
@@ -187,7 +187,6 @@ mod tests {
         let wallet = EncryptedWallet::new(
             "test-id".to_string(),
             "test-wallet".to_string(),
-            ChainType::Evm,
             vec![WalletAccount {
                 account_id: "eip155:1:0xabc".to_string(),
                 address: "0xabc".to_string(),
@@ -212,7 +211,6 @@ mod tests {
         let wallet = EncryptedWallet::new(
             "uuid-123".to_string(),
             "my-wallet".to_string(),
-            ChainType::Evm,
             vec![WalletAccount {
                 account_id: "eip155:1:0xabc".to_string(),
                 address: "0xabc".to_string(),
@@ -246,7 +244,6 @@ mod tests {
         let wallet = EncryptedWallet::new(
             "del-id".to_string(),
             "del-wallet".to_string(),
-            ChainType::Evm,
             vec![],
             serde_json::json!({}),
             KeyType::Mnemonic,
@@ -267,7 +264,6 @@ mod tests {
         let wallet = EncryptedWallet::new(
             "id-1".to_string(),
             "existing-name".to_string(),
-            ChainType::Evm,
             vec![],
             serde_json::json!({}),
             KeyType::Mnemonic,

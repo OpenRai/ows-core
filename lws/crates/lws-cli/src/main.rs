@@ -3,7 +3,7 @@ mod commands;
 mod vault;
 
 use clap::{Parser, Subcommand};
-use lws_core::{ChainType, LwsError};
+use lws_core::LwsError;
 use lws_signer::hd::HdError;
 use lws_signer::mnemonic::MnemonicError;
 use lws_signer::{CryptoError, SignerError};
@@ -54,14 +54,11 @@ enum Commands {
 
 #[derive(Subcommand)]
 enum WalletCommands {
-    /// Create a new wallet (generates mnemonic, encrypts and saves to vault)
+    /// Create a new universal wallet (generates mnemonic, derives all chain addresses)
     Create {
         /// Wallet name
         #[arg(long)]
         name: String,
-        /// Chain type (evm, solana, bitcoin, cosmos, tron)
-        #[arg(long)]
-        chain: String,
         /// Number of words (12 or 24)
         #[arg(long, default_value = "12")]
         words: u32,
@@ -74,9 +71,6 @@ enum WalletCommands {
         /// Wallet name
         #[arg(long)]
         name: String,
-        /// Chain type (evm, solana, bitcoin, cosmos, tron)
-        #[arg(long)]
-        chain: String,
         /// Import a mnemonic phrase (from LWS_MNEMONIC env or stdin)
         #[arg(long)]
         mnemonic: bool,
@@ -121,7 +115,7 @@ enum WalletCommands {
 enum SignCommands {
     /// Sign a message with chain-specific formatting (EIP-191, Bitcoin message signing, etc.)
     Message {
-        /// Chain type (evm, solana, bitcoin, cosmos, tron)
+        /// Chain (ethereum, arbitrum, solana, bitcoin, cosmos, tron, or CAIP-2 ID)
         #[arg(long)]
         chain: String,
         /// Wallet name or ID (uses stored encrypted mnemonic)
@@ -145,7 +139,7 @@ enum SignCommands {
     },
     /// Sign a transaction (accepts hex-encoded unsigned transaction bytes)
     Tx {
-        /// Chain type (evm, solana, bitcoin, cosmos, tron)
+        /// Chain (ethereum, arbitrum, solana, bitcoin, cosmos, tron, or CAIP-2 ID)
         #[arg(long)]
         chain: String,
         /// Wallet name or ID (uses stored encrypted mnemonic)
@@ -163,7 +157,7 @@ enum SignCommands {
     },
     /// Sign and broadcast a transaction
     SendTx {
-        /// Chain type (evm, solana, bitcoin, cosmos, tron)
+        /// Chain (ethereum, arbitrum, solana, bitcoin, cosmos, tron, or CAIP-2 ID)
         #[arg(long)]
         chain: String,
         /// Wallet name or ID (uses stored encrypted mnemonic)
@@ -194,9 +188,9 @@ enum MnemonicCommands {
     },
     /// Derive an address from a mnemonic (reads from LWS_MNEMONIC env or stdin)
     Derive {
-        /// Chain type (evm, solana, bitcoin, cosmos, tron)
+        /// Chain (ethereum, arbitrum, solana, bitcoin, cosmos, tron, or CAIP-2 ID). If omitted, derives all chains.
         #[arg(long)]
-        chain: String,
+        chain: Option<String>,
         /// Account index
         #[arg(long, default_value = "0")]
         index: u32,
@@ -231,9 +225,8 @@ enum CliError {
     InvalidArgs(String),
 }
 
-pub(crate) fn parse_chain(s: &str) -> Result<ChainType, CliError> {
-    s.parse::<ChainType>()
-        .map_err(|e| CliError::InvalidArgs(e))
+pub(crate) fn parse_chain(s: &str) -> Result<lws_core::Chain, CliError> {
+    lws_core::parse_chain(s).map_err(|e| CliError::InvalidArgs(e))
 }
 
 fn main() {
@@ -264,17 +257,15 @@ fn run(cli: Cli) -> Result<(), CliError> {
         Commands::Wallet { subcommand } => match subcommand {
             WalletCommands::Create {
                 name,
-                chain,
                 words,
                 show_mnemonic,
-            } => commands::wallet::create(&name, &chain, words, show_mnemonic),
+            } => commands::wallet::create(&name, words, show_mnemonic),
             WalletCommands::Import {
                 name,
-                chain,
                 mnemonic,
                 private_key,
                 index,
-            } => commands::wallet::import(&name, &chain, mnemonic, private_key, index),
+            } => commands::wallet::import(&name, mnemonic, private_key, index),
             WalletCommands::Export { wallet } => commands::wallet::export(&wallet),
             WalletCommands::Delete { wallet, confirm } => {
                 commands::wallet::delete(&wallet, confirm)
@@ -328,7 +319,9 @@ fn run(cli: Cli) -> Result<(), CliError> {
         },
         Commands::Mnemonic { subcommand } => match subcommand {
             MnemonicCommands::Generate { words } => commands::generate::run(words),
-            MnemonicCommands::Derive { chain, index } => commands::derive::run(&chain, index),
+            MnemonicCommands::Derive { chain, index } => {
+                commands::derive::run(chain.as_deref(), index)
+            }
         },
         Commands::Config { subcommand } => match subcommand {
             ConfigCommands::Show => commands::config::show(),

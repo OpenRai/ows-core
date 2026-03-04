@@ -1,14 +1,19 @@
-use lws_core::ChainType;
 use serde::{Deserialize, Serialize};
+
+/// A single account within a wallet (one per chain family).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AccountInfo {
+    pub chain_id: String,
+    pub address: String,
+    pub derivation_path: String,
+}
 
 /// Binding-friendly wallet information (no crypto envelope exposed).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WalletInfo {
     pub id: String,
     pub name: String,
-    pub chain: ChainType,
-    pub address: String,
-    pub derivation_path: String,
+    pub accounts: Vec<AccountInfo>,
     pub created_at: String,
 }
 

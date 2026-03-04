@@ -19,7 +19,7 @@ pub fn run(
     let tx_bytes = hex::decode(tx_hex_clean)
         .map_err(|e| CliError::InvalidArgs(format!("invalid hex transaction: {e}")))?;
 
-    let signer = signer_for_chain(chain);
+    let signer = signer_for_chain(chain.chain_type);
     let path = signer.default_derivation_path(index);
     let curve = signer.curve();
 

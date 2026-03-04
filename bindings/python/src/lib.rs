@@ -24,51 +24,48 @@ fn derive_address(mnemonic: &str, chain: &str, index: Option<u32>) -> PyResult<S
     lws_lib::derive_address(mnemonic, chain, index).map_err(map_err)
 }
 
-/// Create a new wallet.
+/// Create a new universal wallet (derives addresses for all chains).
 #[pyfunction]
-#[pyo3(signature = (name, chain, passphrase=None, words=None, vault_path_opt=None))]
+#[pyo3(signature = (name, passphrase=None, words=None, vault_path_opt=None))]
 fn create_wallet(
     name: &str,
-    chain: &str,
     passphrase: Option<&str>,
     words: Option<u32>,
     vault_path_opt: Option<String>,
 ) -> PyResult<PyObject> {
-    let info = lws_lib::create_wallet(name, chain, words, passphrase, vault_path(vault_path_opt).as_deref())
+    let info = lws_lib::create_wallet(name, words, passphrase, vault_path(vault_path_opt).as_deref())
         .map_err(map_err)?;
     Python::with_gil(|py| wallet_info_to_dict(py, &info))
 }
 
-/// Import a wallet from a mnemonic phrase.
+/// Import a wallet from a mnemonic phrase (derives addresses for all chains).
 #[pyfunction]
-#[pyo3(signature = (name, chain, mnemonic, passphrase=None, index=None, vault_path_opt=None))]
+#[pyo3(signature = (name, mnemonic, passphrase=None, index=None, vault_path_opt=None))]
 fn import_wallet_mnemonic(
     name: &str,
-    chain: &str,
     mnemonic: &str,
     passphrase: Option<&str>,
     index: Option<u32>,
     vault_path_opt: Option<String>,
 ) -> PyResult<PyObject> {
     let info = lws_lib::import_wallet_mnemonic(
-        name, chain, mnemonic, passphrase, index, vault_path(vault_path_opt).as_deref(),
+        name, mnemonic, passphrase, index, vault_path(vault_path_opt).as_deref(),
     )
     .map_err(map_err)?;
     Python::with_gil(|py| wallet_info_to_dict(py, &info))
 }
 
-/// Import a wallet from a hex-encoded private key.
+/// Import a wallet from a hex-encoded private key (derives addresses for all chains).
 #[pyfunction]
-#[pyo3(signature = (name, chain, private_key_hex, passphrase=None, vault_path_opt=None))]
+#[pyo3(signature = (name, private_key_hex, passphrase=None, vault_path_opt=None))]
 fn import_wallet_private_key(
     name: &str,
-    chain: &str,
     private_key_hex: &str,
     passphrase: Option<&str>,
     vault_path_opt: Option<String>,
 ) -> PyResult<PyObject> {
     let info = lws_lib::import_wallet_private_key(
-        name, chain, private_key_hex, passphrase, vault_path(vault_path_opt).as_deref(),
+        name, private_key_hex, passphrase, vault_path(vault_path_opt).as_deref(),
     )
     .map_err(map_err)?;
     Python::with_gil(|py| wallet_info_to_dict(py, &info))
@@ -216,9 +213,17 @@ fn wallet_info_to_dict_inner<'py>(
     let dict = pyo3::types::PyDict::new_bound(py);
     dict.set_item("id", &info.id)?;
     dict.set_item("name", &info.name)?;
-    dict.set_item("chain", info.chain.to_string())?;
-    dict.set_item("address", &info.address)?;
-    dict.set_item("derivation_path", &info.derivation_path)?;
+
+    let accounts_list = pyo3::types::PyList::empty_bound(py);
+    for acct in &info.accounts {
+        let acct_dict = pyo3::types::PyDict::new_bound(py);
+        acct_dict.set_item("chain_id", &acct.chain_id)?;
+        acct_dict.set_item("address", &acct.address)?;
+        acct_dict.set_item("derivation_path", &acct.derivation_path)?;
+        accounts_list.append(acct_dict)?;
+    }
+    dict.set_item("accounts", accounts_list)?;
+
     dict.set_item("created_at", &info.created_at)?;
     Ok(dict)
 }

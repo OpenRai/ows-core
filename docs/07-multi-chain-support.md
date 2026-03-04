@@ -196,20 +196,62 @@ Registered in `~/.lws/config.json`:
 
 ## RPC Configuration
 
-Each chain needs an RPC endpoint. Defaults are configured per chain in `~/.lws/config.json`:
+LWS ships with built-in default RPC endpoints for well-known chains, so it works out of the box without any configuration:
+
+| CAIP-2 Chain ID | Default RPC URL |
+|---|---|
+| `eip155:1` | `https://eth.llamarpc.com` |
+| `eip155:137` | `https://polygon-rpc.com` |
+| `eip155:42161` | `https://arb1.arbitrum.io/rpc` |
+| `eip155:10` | `https://mainnet.optimism.io` |
+| `eip155:8453` | `https://mainnet.base.org` |
+| `eip155:56` | `https://bsc-dataseed.binance.org` |
+| `eip155:43114` | `https://api.avax.network/ext/bc/C/rpc` |
+| `solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp` | `https://api.mainnet-beta.solana.com` |
+| `bip122:000000000019d6689c085ae165831e93` | `https://mempool.space/api` |
+| `cosmos:cosmoshub-4` | `https://cosmos-rest.publicnode.com` |
+| `tron:mainnet` | `https://api.trongrid.io` |
+
+These defaults are public, rate-limited endpoints suitable for development and light usage. For production workloads, override them with your own RPC provider in `~/.lws/config.json`:
 
 ```json
 {
   "rpc": {
     "eip155:1": "https://eth-mainnet.g.alchemy.com/v2/YOUR_KEY",
     "eip155:8453": "https://mainnet.base.org",
-    "eip155:84532": "https://sepolia.base.org",
-    "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp": "https://api.mainnet-beta.solana.com"
+    "eip155:84532": "https://sepolia.base.org"
   }
 }
 ```
 
-RPC URLs can also be overridden per-request via the `rpcUrl` parameter in signing requests.
+User overrides are merged on top of built-in defaults — you only need to specify the chains you want to change or add. Unlisted defaults remain available.
+
+### RPC Resolution Order
+
+When broadcasting a transaction, the RPC URL is resolved in this order:
+
+1. **`--rpc-url` CLI flag** (or `rpcUrl` parameter in the API) — highest priority
+2. **`~/.lws/config.json`** user override for the chain
+3. **Built-in default** for well-known chains
+
+### Viewing Configuration
+
+Use `lws config show` to see the active configuration and all RPC endpoints:
+
+```
+$ lws config show
+Vault:  ~/.lws
+Config: ~/.lws/config.json (not found — using defaults)
+
+RPC endpoints:
+  bip122:000000000019d6689c085ae165831e93  https://mempool.space/api              (default)
+  cosmos:cosmoshub-4                       https://cosmos-rest.publicnode.com      (default)
+  eip155:1                                 https://eth.llamarpc.com               (default)
+  eip155:10                                https://mainnet.optimism.io             (default)
+  ...
+```
+
+Endpoints sourced from built-in defaults are annotated `(default)`; user overrides are annotated `(custom)`.
 
 ## HD Derivation
 

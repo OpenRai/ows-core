@@ -18,14 +18,14 @@ pub fn run(
     let mnemonic = Mnemonic::from_phrase(&mnemonic_str)?;
     mnemonic_str.zeroize();
 
-    let signer = signer_for_chain(chain);
+    let signer = signer_for_chain(chain.chain_type);
     let path = signer.default_derivation_path(index);
     let curve = signer.curve();
 
     let key = HdDeriver::derive_from_mnemonic_cached(&mnemonic, "", &path, curve)?;
 
     let output = if let Some(td_json) = typed_data {
-        if chain != lws_core::ChainType::Evm {
+        if chain.chain_type != lws_core::ChainType::Evm {
             return Err(CliError::InvalidArgs(
                 "--typed-data is only supported for EVM chains".into(),
             ));

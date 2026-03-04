@@ -1,47 +1,79 @@
 use std::path::Path;
 use std::process::Command;
 
-use lws_core::{ChainType, Config, EncryptedWallet, KeyType, WalletAccount};
+use lws_core::{
+    default_chain_for_type, ChainType, Config, EncryptedWallet, KeyType, WalletAccount,
+    ALL_CHAIN_TYPES,
+};
 use lws_signer::{
     decrypt, encrypt, signer_for_chain, CryptoEnvelope, HdDeriver, Mnemonic, MnemonicStrength,
 };
 
 use crate::error::LwsLibError;
-use crate::types::{SendResult, SignResult, WalletInfo};
+use crate::types::{AccountInfo, SendResult, SignResult, WalletInfo};
 use crate::vault;
-
-/// Returns a default CAIP-2 chain reference for a given chain type.
-fn default_chain_reference(chain: ChainType) -> &'static str {
-    match chain {
-        ChainType::Evm => "1",
-        ChainType::Solana => "5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp",
-        ChainType::Bitcoin => "000000000019d6689c085ae165831e93",
-        ChainType::Cosmos => "cosmoshub-4",
-        ChainType::Tron => "mainnet",
-    }
-}
 
 /// Convert an EncryptedWallet to the binding-friendly WalletInfo.
 fn wallet_to_info(w: &EncryptedWallet) -> WalletInfo {
-    let (address, derivation_path) = w
-        .accounts
-        .first()
-        .map(|a| (a.address.clone(), a.derivation_path.clone()))
-        .unwrap_or_default();
-
     WalletInfo {
         id: w.id.clone(),
         name: w.name.clone(),
-        chain: w.chain_type,
-        address,
-        derivation_path,
+        accounts: w
+            .accounts
+            .iter()
+            .map(|a| AccountInfo {
+                chain_id: a.chain_id.clone(),
+                address: a.address.clone(),
+                derivation_path: a.derivation_path.clone(),
+            })
+            .collect(),
         created_at: w.created_at.clone(),
     }
 }
 
-fn parse_chain(s: &str) -> Result<ChainType, LwsLibError> {
-    s.parse::<ChainType>()
-        .map_err(|e| LwsLibError::InvalidInput(e))
+fn parse_chain(s: &str) -> Result<lws_core::Chain, LwsLibError> {
+    lws_core::parse_chain(s).map_err(|e| LwsLibError::InvalidInput(e))
+}
+
+/// Derive accounts for all chain families from a mnemonic at the given index.
+fn derive_all_accounts(
+    mnemonic: &Mnemonic,
+    index: u32,
+) -> Result<Vec<WalletAccount>, LwsLibError> {
+    let mut accounts = Vec::with_capacity(ALL_CHAIN_TYPES.len());
+    for ct in &ALL_CHAIN_TYPES {
+        let chain = default_chain_for_type(*ct);
+        let signer = signer_for_chain(*ct);
+        let path = signer.default_derivation_path(index);
+        let curve = signer.curve();
+        let key = HdDeriver::derive_from_mnemonic(mnemonic, "", &path, curve)?;
+        let address = signer.derive_address(key.expose())?;
+        let account_id = format!("{}:{}", chain.chain_id, address);
+        accounts.push(WalletAccount {
+            account_id,
+            address,
+            chain_id: chain.chain_id.to_string(),
+            derivation_path: path,
+        });
+    }
+    Ok(accounts)
+}
+
+/// Derive accounts for all chain families from raw key bytes.
+fn derive_all_accounts_from_key(key_bytes: &[u8]) -> Result<Vec<WalletAccount>, LwsLibError> {
+    let mut accounts = Vec::with_capacity(ALL_CHAIN_TYPES.len());
+    for ct in &ALL_CHAIN_TYPES {
+        let chain = default_chain_for_type(*ct);
+        let signer = signer_for_chain(*ct);
+        let address = signer.derive_address(key_bytes)?;
+        accounts.push(WalletAccount {
+            account_id: format!("{}:{}", chain.chain_id, address),
+            address,
+            chain_id: chain.chain_id.to_string(),
+            derivation_path: String::new(),
+        });
+    }
+    Ok(accounts)
 }
 
 /// Generate a new BIP-39 mnemonic phrase.
@@ -66,7 +98,7 @@ pub fn derive_address(
 ) -> Result<String, LwsLibError> {
     let chain = parse_chain(chain)?;
     let mnemonic = Mnemonic::from_phrase(mnemonic_phrase)?;
-    let signer = signer_for_chain(chain);
+    let signer = signer_for_chain(chain.chain_type);
     let path = signer.default_derivation_path(index.unwrap_or(0));
     let curve = signer.curve();
 
@@ -75,16 +107,15 @@ pub fn derive_address(
     Ok(address)
 }
 
-/// Create a new wallet: generates mnemonic, derives address, encrypts, saves to vault.
+/// Create a new universal wallet: generates mnemonic, derives addresses for all chains,
+/// encrypts, and saves to vault.
 pub fn create_wallet(
     name: &str,
-    chain: &str,
     words: Option<u32>,
     passphrase: Option<&str>,
     vault_path: Option<&Path>,
 ) -> Result<WalletInfo, LwsLibError> {
     let passphrase = passphrase.unwrap_or("");
-    let chain = parse_chain(chain)?;
     let words = words.unwrap_or(12);
     let strength = match words {
         12 => MnemonicStrength::Words12,
@@ -97,15 +128,7 @@ pub fn create_wallet(
     }
 
     let mnemonic = Mnemonic::generate(strength)?;
-    let signer = signer_for_chain(chain);
-    let path = signer.default_derivation_path(0);
-    let curve = signer.curve();
-
-    let key = HdDeriver::derive_from_mnemonic(&mnemonic, "", &path, curve)?;
-    let address = signer.derive_address(key.expose())?;
-
-    let chain_id_str = format!("{}:{}", chain.namespace(), default_chain_reference(chain));
-    let account_id_str = format!("{chain_id_str}:{address}");
+    let accounts = derive_all_accounts(&mnemonic, 0)?;
 
     let phrase = mnemonic.phrase();
     let crypto_envelope = encrypt(phrase.expose(), passphrase)?;
@@ -116,13 +139,7 @@ pub fn create_wallet(
     let wallet = EncryptedWallet::new(
         wallet_id,
         name.to_string(),
-        chain,
-        vec![WalletAccount {
-            account_id: account_id_str,
-            address: address.clone(),
-            chain_id: chain_id_str,
-            derivation_path: path,
-        }],
+        accounts,
         crypto_json,
         KeyType::Mnemonic,
     );
@@ -131,17 +148,15 @@ pub fn create_wallet(
     Ok(wallet_to_info(&wallet))
 }
 
-/// Import a wallet from a mnemonic phrase.
+/// Import a wallet from a mnemonic phrase. Derives addresses for all chains.
 pub fn import_wallet_mnemonic(
     name: &str,
-    chain: &str,
     mnemonic_phrase: &str,
     passphrase: Option<&str>,
     index: Option<u32>,
     vault_path: Option<&Path>,
 ) -> Result<WalletInfo, LwsLibError> {
     let passphrase = passphrase.unwrap_or("");
-    let chain = parse_chain(chain)?;
     let index = index.unwrap_or(0);
 
     if vault::wallet_name_exists(name, vault_path)? {
@@ -149,31 +164,18 @@ pub fn import_wallet_mnemonic(
     }
 
     let mnemonic = Mnemonic::from_phrase(mnemonic_phrase)?;
-    let signer = signer_for_chain(chain);
-    let path = signer.default_derivation_path(index);
-    let curve = signer.curve();
-
-    let key = HdDeriver::derive_from_mnemonic(&mnemonic, "", &path, curve)?;
-    let address = signer.derive_address(key.expose())?;
+    let accounts = derive_all_accounts(&mnemonic, index)?;
 
     let phrase = mnemonic.phrase();
     let crypto_envelope = encrypt(phrase.expose(), passphrase)?;
     let crypto_json = serde_json::to_value(&crypto_envelope)?;
 
     let wallet_id = uuid::Uuid::new_v4().to_string();
-    let chain_id_str = format!("{}:{}", chain.namespace(), default_chain_reference(chain));
-    let account_id_str = format!("{chain_id_str}:{address}");
 
     let wallet = EncryptedWallet::new(
         wallet_id,
         name.to_string(),
-        chain,
-        vec![WalletAccount {
-            account_id: account_id_str,
-            address: address.clone(),
-            chain_id: chain_id_str,
-            derivation_path: path,
-        }],
+        accounts,
         crypto_json,
         KeyType::Mnemonic,
     );
@@ -182,16 +184,14 @@ pub fn import_wallet_mnemonic(
     Ok(wallet_to_info(&wallet))
 }
 
-/// Import a wallet from a hex-encoded private key.
+/// Import a wallet from a hex-encoded private key. Derives addresses for all chains.
 pub fn import_wallet_private_key(
     name: &str,
-    chain: &str,
     private_key_hex: &str,
     passphrase: Option<&str>,
     vault_path: Option<&Path>,
 ) -> Result<WalletInfo, LwsLibError> {
     let passphrase = passphrase.unwrap_or("");
-    let chain = parse_chain(chain)?;
 
     if vault::wallet_name_exists(name, vault_path)? {
         return Err(LwsLibError::WalletNameExists(name.to_string()));
@@ -201,26 +201,17 @@ pub fn import_wallet_private_key(
     let key_bytes = hex::decode(hex_trimmed)
         .map_err(|e| LwsLibError::InvalidInput(format!("invalid hex private key: {e}")))?;
 
-    let signer = signer_for_chain(chain);
-    let address = signer.derive_address(&key_bytes)?;
+    let accounts = derive_all_accounts_from_key(&key_bytes)?;
 
     let crypto_envelope = encrypt(&key_bytes, passphrase)?;
     let crypto_json = serde_json::to_value(&crypto_envelope)?;
 
     let wallet_id = uuid::Uuid::new_v4().to_string();
-    let chain_id_str = format!("{}:{}", chain.namespace(), default_chain_reference(chain));
-    let account_id_str = format!("{chain_id_str}:{address}");
 
     let wallet = EncryptedWallet::new(
         wallet_id,
         name.to_string(),
-        chain,
-        vec![WalletAccount {
-            account_id: account_id_str,
-            address: address.clone(),
-            chain_id: chain_id_str,
-            derivation_path: String::new(),
-        }],
+        accounts,
         crypto_json,
         KeyType::PrivateKey,
     );
@@ -291,9 +282,6 @@ pub fn rename_wallet(
 }
 
 /// Sign a transaction. Returns hex-encoded signature.
-///
-/// The `wallet` parameter is a wallet name or ID.
-/// The `tx_hex` parameter is the hex-encoded unsigned transaction bytes.
 pub fn sign_transaction(
     wallet: &str,
     chain: &str,
@@ -311,7 +299,7 @@ pub fn sign_transaction(
     let tx_bytes = hex::decode(tx_hex_clean)
         .map_err(|e| LwsLibError::InvalidInput(format!("invalid hex transaction: {e}")))?;
 
-    let signer = signer_for_chain(chain);
+    let signer = signer_for_chain(chain.chain_type);
     let path = signer.default_derivation_path(index.unwrap_or(0));
     let curve = signer.curve();
 
@@ -325,9 +313,6 @@ pub fn sign_transaction(
 }
 
 /// Sign a message. Returns hex-encoded signature.
-///
-/// The `wallet` parameter is a wallet name or ID.
-/// The `encoding` parameter is "utf8" or "hex" (defaults to "utf8").
 pub fn sign_message(
     wallet: &str,
     chain: &str,
@@ -354,7 +339,7 @@ pub fn sign_message(
         }
     };
 
-    let signer = signer_for_chain(chain);
+    let signer = signer_for_chain(chain.chain_type);
     let path = signer.default_derivation_path(index.unwrap_or(0));
     let curve = signer.curve();
 
@@ -378,7 +363,7 @@ pub fn sign_and_send(
     vault_path: Option<&Path>,
 ) -> Result<SendResult, LwsLibError> {
     let passphrase = passphrase.unwrap_or("");
-    let chain_type = parse_chain(chain)?;
+    let chain = parse_chain(chain)?;
 
     // 1. Sign
     let mnemonic_str = decrypt_wallet_secret(wallet, passphrase, vault_path)?;
@@ -388,18 +373,18 @@ pub fn sign_and_send(
     let tx_bytes = hex::decode(tx_hex_clean)
         .map_err(|e| LwsLibError::InvalidInput(format!("invalid hex transaction: {e}")))?;
 
-    let signer = signer_for_chain(chain_type);
+    let signer = signer_for_chain(chain.chain_type);
     let path = signer.default_derivation_path(index.unwrap_or(0));
     let curve = signer.curve();
 
     let key = HdDeriver::derive_from_mnemonic(&mnemonic, "", &path, curve)?;
     let output = signer.sign_transaction(key.expose(), &tx_bytes)?;
 
-    // 2. Resolve RPC URL
-    let rpc = resolve_rpc_url(chain_type, rpc_url)?;
+    // 2. Resolve RPC URL using exact chain_id
+    let rpc = resolve_rpc_url(chain.chain_id, chain.chain_type, rpc_url)?;
 
     // 3. Broadcast
-    let tx_hash = broadcast(chain_type, &rpc, &output.signature)?;
+    let tx_hash = broadcast(chain.chain_type, &rpc, &output.signature)?;
 
     Ok(SendResult { tx_hash })
 }
@@ -420,22 +405,34 @@ fn decrypt_wallet_secret(
         .map_err(|_| LwsLibError::InvalidInput("wallet contains invalid UTF-8 secret".into()))
 }
 
-/// Resolve the RPC URL: explicit > config override > built-in default.
-fn resolve_rpc_url(chain: ChainType, explicit: Option<&str>) -> Result<String, LwsLibError> {
+/// Resolve the RPC URL: explicit > config override (exact chain_id) > config (namespace) > built-in default.
+fn resolve_rpc_url(
+    chain_id: &str,
+    chain_type: ChainType,
+    explicit: Option<&str>,
+) -> Result<String, LwsLibError> {
     if let Some(url) = explicit {
         return Ok(url.to_string());
     }
 
     let config = Config::load_or_default();
     let defaults = Config::default_rpc();
-    let namespace = chain.namespace();
 
+    // Try exact chain_id match first
+    if let Some(url) = config.rpc.get(chain_id) {
+        return Ok(url.clone());
+    }
+    if let Some(url) = defaults.get(chain_id) {
+        return Ok(url.clone());
+    }
+
+    // Fallback to namespace match
+    let namespace = chain_type.namespace();
     for (key, url) in &config.rpc {
         if key.starts_with(namespace) {
             return Ok(url.clone());
         }
     }
-
     for (key, url) in &defaults {
         if key.starts_with(namespace) {
             return Ok(url.clone());
@@ -443,7 +440,7 @@ fn resolve_rpc_url(chain: ChainType, explicit: Option<&str>) -> Result<String, L
     }
 
     Err(LwsLibError::InvalidInput(format!(
-        "no RPC URL configured for chain '{chain}'"
+        "no RPC URL configured for chain '{chain_id}'"
     )))
 }
 
@@ -602,6 +599,14 @@ mod tests {
     }
 
     #[test]
+    fn test_derive_address_ethereum() {
+        let phrase = generate_mnemonic(12).unwrap();
+        let addr = derive_address(&phrase, "ethereum", None).unwrap();
+        assert!(addr.starts_with("0x"));
+        assert_eq!(addr.len(), 42);
+    }
+
+    #[test]
     fn test_derive_address_solana() {
         let phrase = generate_mnemonic(12).unwrap();
         let addr = derive_address(&phrase, "solana", None).unwrap();
@@ -609,16 +614,22 @@ mod tests {
     }
 
     #[test]
-    fn test_create_and_list_wallets() {
+    fn test_create_universal_wallet() {
         let dir = tempfile::tempdir().unwrap();
         let vault = dir.path();
 
-        let info = create_wallet("test-wallet", "evm", None, None, Some(vault))
-            .unwrap();
+        let info = create_wallet("test-wallet", None, None, Some(vault)).unwrap();
 
         assert_eq!(info.name, "test-wallet");
-        assert_eq!(info.chain, ChainType::Evm);
-        assert!(info.address.starts_with("0x"));
+        assert_eq!(info.accounts.len(), 5, "universal wallet should have 5 accounts");
+
+        // Verify each chain family is present
+        let chain_ids: Vec<&str> = info.accounts.iter().map(|a| a.chain_id.as_str()).collect();
+        assert!(chain_ids.iter().any(|c| c.starts_with("eip155:")));
+        assert!(chain_ids.iter().any(|c| c.starts_with("solana:")));
+        assert!(chain_ids.iter().any(|c| c.starts_with("bip122:")));
+        assert!(chain_ids.iter().any(|c| c.starts_with("cosmos:")));
+        assert!(chain_ids.iter().any(|c| c.starts_with("tron:")));
 
         let wallets = list_wallets(Some(vault)).unwrap();
         assert_eq!(wallets.len(), 1);
@@ -630,8 +641,8 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let vault = dir.path();
 
-        create_wallet("dup-name", "evm", None, None, Some(vault)).unwrap();
-        let err = create_wallet("dup-name", "evm", None, None, Some(vault));
+        create_wallet("dup-name", None, None, Some(vault)).unwrap();
+        let err = create_wallet("dup-name", None, None, Some(vault));
         assert!(err.is_err());
     }
 
@@ -640,8 +651,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let vault = dir.path();
 
-        let info = create_wallet("lookup-test", "evm", None, None, Some(vault))
-            .unwrap();
+        let info = create_wallet("lookup-test", None, None, Some(vault)).unwrap();
 
         // By name
         let found = get_wallet("lookup-test", Some(vault)).unwrap();
@@ -657,8 +667,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let vault = dir.path();
 
-        let info = create_wallet("del-test", "evm", None, None, Some(vault))
-            .unwrap();
+        let info = create_wallet("del-test", None, None, Some(vault)).unwrap();
 
         delete_wallet(&info.id, Some(vault)).unwrap();
         assert!(list_wallets(Some(vault)).unwrap().is_empty());
@@ -669,7 +678,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let vault = dir.path();
 
-        create_wallet("export-test", "evm", None, None, Some(vault)).unwrap();
+        create_wallet("export-test", None, None, Some(vault)).unwrap();
 
         let secret = export_wallet("export-test", None, Some(vault)).unwrap();
         // The secret should be a valid mnemonic (12 words)
@@ -681,7 +690,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let vault = dir.path();
 
-        create_wallet("old-name", "evm", None, None, Some(vault)).unwrap();
+        create_wallet("old-name", None, None, Some(vault)).unwrap();
         rename_wallet("old-name", "new-name", Some(vault)).unwrap();
 
         let found = get_wallet("new-name", Some(vault)).unwrap();
@@ -695,11 +704,10 @@ mod tests {
         let vault = dir.path();
 
         let phrase = generate_mnemonic(12).unwrap();
-        let expected_addr = derive_address(&phrase, "evm", None).unwrap();
+        let expected_evm_addr = derive_address(&phrase, "ethereum", None).unwrap();
 
         let info = import_wallet_mnemonic(
             "imported",
-            "evm",
             &phrase,
             None,
             None,
@@ -708,7 +716,11 @@ mod tests {
         .unwrap();
 
         assert_eq!(info.name, "imported");
-        assert_eq!(info.address, expected_addr);
+        assert_eq!(info.accounts.len(), 5);
+
+        // The EVM account should match the derived address
+        let evm_account = info.accounts.iter().find(|a| a.chain_id.starts_with("eip155:")).unwrap();
+        assert_eq!(evm_account.address, expected_evm_addr);
     }
 
     #[test]
@@ -716,9 +728,8 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let vault = dir.path();
 
-        create_wallet("signer", "evm", None, None, Some(vault)).unwrap();
+        create_wallet("signer", None, None, Some(vault)).unwrap();
 
-        // Sign a dummy 32-byte "transaction" (for EVM, sign_transaction hashes the input)
         let tx_hex = "deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef";
         let result =
             sign_transaction("signer", "evm", tx_hex, None, None, Some(vault))
@@ -733,7 +744,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let vault = dir.path();
 
-        create_wallet("msg-signer", "evm", None, None, Some(vault)).unwrap();
+        create_wallet("msg-signer", None, None, Some(vault)).unwrap();
 
         let result = sign_message(
             "msg-signer",
@@ -749,6 +760,91 @@ mod tests {
         assert!(!result.signature.is_empty());
     }
 
+    #[test]
+    fn test_universal_wallet_addresses_are_deterministic() {
+        let dir = tempfile::tempdir().unwrap();
+        let vault = dir.path();
 
+        let phrase = generate_mnemonic(12).unwrap();
 
+        let info = import_wallet_mnemonic("deterministic", &phrase, None, None, Some(vault)).unwrap();
+
+        // Derive each address individually and verify they match
+        for acct in &info.accounts {
+            let chain_str = if acct.chain_id.starts_with("eip155:") {
+                "ethereum"
+            } else if acct.chain_id.starts_with("solana:") {
+                "solana"
+            } else if acct.chain_id.starts_with("bip122:") {
+                "bitcoin"
+            } else if acct.chain_id.starts_with("cosmos:") {
+                "cosmos"
+            } else if acct.chain_id.starts_with("tron:") {
+                "tron"
+            } else {
+                panic!("unknown chain_id: {}", acct.chain_id);
+            };
+
+            let derived = derive_address(&phrase, chain_str, None).unwrap();
+            assert_eq!(acct.address, derived, "address mismatch for {}", chain_str);
+        }
+    }
+
+    #[test]
+    fn test_addresses_computationally_related() {
+        // Verify that all addresses in a universal wallet are derived from the
+        // same mnemonic seed, and that re-importing the same mnemonic produces
+        // identical addresses across all chains.
+        let dir1 = tempfile::tempdir().unwrap();
+        let dir2 = tempfile::tempdir().unwrap();
+
+        // Create a wallet and export its mnemonic
+        let info1 = create_wallet("wallet-a", None, None, Some(dir1.path())).unwrap();
+        let mnemonic = export_wallet("wallet-a", None, Some(dir1.path())).unwrap();
+
+        // Import the same mnemonic into a second vault
+        let info2 = import_wallet_mnemonic("wallet-b", &mnemonic, None, None, Some(dir2.path())).unwrap();
+
+        // All 5 accounts must match exactly (same mnemonic → same addresses)
+        assert_eq!(info1.accounts.len(), 5);
+        assert_eq!(info2.accounts.len(), 5);
+        for (a1, a2) in info1.accounts.iter().zip(info2.accounts.iter()) {
+            assert_eq!(a1.chain_id, a2.chain_id, "chain_id mismatch");
+            assert_eq!(a1.address, a2.address,
+                "address mismatch for {}: created={} vs imported={}",
+                a1.chain_id, a1.address, a2.address
+            );
+            assert_eq!(a1.derivation_path, a2.derivation_path, "derivation_path mismatch");
+        }
+
+        // Verify the addresses are all distinct from each other
+        // (different chains produce different addresses from the same seed)
+        let addresses: Vec<&str> = info1.accounts.iter().map(|a| a.address.as_str()).collect();
+        for i in 0..addresses.len() {
+            for j in (i + 1)..addresses.len() {
+                assert_ne!(addresses[i], addresses[j],
+                    "addresses for {} and {} should differ",
+                    info1.accounts[i].chain_id, info1.accounts[j].chain_id
+                );
+            }
+        }
+
+        // Verify each address individually matches derive_address()
+        for acct in &info1.accounts {
+            let chain_str = if acct.chain_id.starts_with("eip155:") {
+                "ethereum"
+            } else if acct.chain_id.starts_with("solana:") {
+                "solana"
+            } else if acct.chain_id.starts_with("bip122:") {
+                "bitcoin"
+            } else if acct.chain_id.starts_with("cosmos:") {
+                "cosmos"
+            } else {
+                "tron"
+            };
+            let derived = derive_address(&mnemonic, chain_str, None).unwrap();
+            assert_eq!(acct.address, derived,
+                "derive_address mismatch for {}", chain_str);
+        }
+    }
 }

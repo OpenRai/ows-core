@@ -7,6 +7,3 @@ pub mod vault;
 pub use error::LwsLibError;
 pub use ops::*;
 pub use types::*;
-
-// Re-export core types that bindings will need.
-pub use lws_core::ChainType;

@@ -70,6 +70,31 @@ interface SignAndSendResult extends SignResult {
 
 The chain plugin handles broadcasting via its configured RPC endpoint. The `confirmations` parameter is chain-specific: on EVM chains it means block confirmations; on Solana it maps to commitment levels (`confirmed` = 1, `finalized` ≈ 31).
 
+#### CLI: `lws sign send-tx`
+
+The `lws sign send-tx` command provides sign-and-broadcast from the command line:
+
+```bash
+lws sign send-tx \
+  --chain evm \
+  --wallet agent-treasury \
+  --tx 0x<hex-encoded-unsigned-tx> \
+  --index 0 \
+  --rpc-url https://eth-sepolia.g.alchemy.com/v2/demo   # optional override
+```
+
+The command signs the transaction using the wallet's encrypted mnemonic, resolves the RPC endpoint (flag > config override > built-in default), broadcasts via the chain-appropriate protocol, and prints the transaction hash. Use `--json` for structured output including `tx_hash`, `chain`, `rpc_url`, and `signature`.
+
+Per-chain broadcast protocols:
+
+| Chain | Broadcast Method |
+|---|---|
+| EVM | JSON-RPC `eth_sendRawTransaction` |
+| Solana | JSON-RPC `sendTransaction` (base64-encoded) |
+| Bitcoin | POST raw hex to `{rpc}/tx` (mempool.space REST) |
+| Cosmos | POST to `{rpc}/cosmos/tx/v1beta1/txs` (base64 tx_bytes) |
+| Tron | POST to `{rpc}/wallet/broadcasthex` |
+
 ### `signMessage(request: SignMessageRequest): Promise<SignMessageResult>`
 
 Signs an arbitrary message (for authentication, attestation, or off-chain signatures like EIP-712).

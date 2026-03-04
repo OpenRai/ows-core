@@ -23,16 +23,32 @@ def test_generate_mnemonic_24():
 
 def test_derive_address_evm():
     phrase = lws.generate_mnemonic(12)
+    # "evm" still works via backward compat
     address = lws.derive_address(phrase, "evm")
     assert address.startswith("0x")
     assert len(address) == 42
 
 
+def test_derive_address_ethereum():
+    phrase = lws.generate_mnemonic(12)
+    address = lws.derive_address(phrase, "ethereum")
+    assert address.startswith("0x")
+    assert len(address) == 42
+
+
 def test_create_and_list_wallets(vault_dir):
-    wallet = lws.create_wallet("test-wallet", "evm", vault_path_opt=vault_dir)
+    wallet = lws.create_wallet("test-wallet", vault_path_opt=vault_dir)
     assert wallet["name"] == "test-wallet"
-    assert wallet["chain"] == "evm"
-    assert wallet["address"].startswith("0x")
+    assert isinstance(wallet["accounts"], list)
+    assert len(wallet["accounts"]) == 5
+
+    # Verify each chain family is present
+    chain_ids = [a["chain_id"] for a in wallet["accounts"]]
+    assert any(c.startswith("eip155:") for c in chain_ids)
+    assert any(c.startswith("solana:") for c in chain_ids)
+    assert any(c.startswith("bip122:") for c in chain_ids)
+    assert any(c.startswith("cosmos:") for c in chain_ids)
+    assert any(c.startswith("tron:") for c in chain_ids)
 
     wallets = lws.list_wallets(vault_path_opt=vault_dir)
     assert len(wallets) == 1
@@ -40,7 +56,7 @@ def test_create_and_list_wallets(vault_dir):
 
 
 def test_get_wallet(vault_dir):
-    wallet = lws.create_wallet("lookup", "evm", vault_path_opt=vault_dir)
+    wallet = lws.create_wallet("lookup", vault_path_opt=vault_dir)
 
     found = lws.get_wallet("lookup", vault_path_opt=vault_dir)
     assert found["id"] == wallet["id"]
@@ -50,7 +66,7 @@ def test_get_wallet(vault_dir):
 
 
 def test_rename_wallet(vault_dir):
-    lws.create_wallet("old-name", "evm", vault_path_opt=vault_dir)
+    lws.create_wallet("old-name", vault_path_opt=vault_dir)
     lws.rename_wallet("old-name", "new-name", vault_path_opt=vault_dir)
 
     found = lws.get_wallet("new-name", vault_path_opt=vault_dir)
@@ -58,13 +74,13 @@ def test_rename_wallet(vault_dir):
 
 
 def test_export_wallet(vault_dir):
-    lws.create_wallet("exportable", "evm", vault_path_opt=vault_dir)
+    lws.create_wallet("exportable", vault_path_opt=vault_dir)
     secret = lws.export_wallet("exportable", vault_path_opt=vault_dir)
     assert len(secret.split()) == 12
 
 
 def test_delete_wallet(vault_dir):
-    wallet = lws.create_wallet("deletable", "evm", vault_path_opt=vault_dir)
+    wallet = lws.create_wallet("deletable", vault_path_opt=vault_dir)
     lws.delete_wallet("deletable", vault_path_opt=vault_dir)
 
     wallets = lws.list_wallets(vault_path_opt=vault_dir)
@@ -73,17 +89,21 @@ def test_delete_wallet(vault_dir):
 
 def test_import_wallet_mnemonic(vault_dir):
     phrase = lws.generate_mnemonic(12)
-    expected_addr = lws.derive_address(phrase, "evm")
+    expected_addr = lws.derive_address(phrase, "ethereum")
 
     wallet = lws.import_wallet_mnemonic(
-        "imported", "evm", phrase, vault_path_opt=vault_dir
+        "imported", phrase, vault_path_opt=vault_dir
     )
     assert wallet["name"] == "imported"
-    assert wallet["address"] == expected_addr
+    assert len(wallet["accounts"]) == 5
+
+    # EVM account should match derived address
+    evm_account = next(a for a in wallet["accounts"] if a["chain_id"].startswith("eip155:"))
+    assert evm_account["address"] == expected_addr
 
 
 def test_sign_transaction(vault_dir):
-    lws.create_wallet("signer", "evm", vault_path_opt=vault_dir)
+    lws.create_wallet("signer", vault_path_opt=vault_dir)
 
     tx_hex = "deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef"
     result = lws.sign_transaction(
@@ -94,7 +114,7 @@ def test_sign_transaction(vault_dir):
 
 
 def test_sign_message(vault_dir):
-    lws.create_wallet("msg-signer", "evm", vault_path_opt=vault_dir)
+    lws.create_wallet("msg-signer", vault_path_opt=vault_dir)
 
     result = lws.sign_message(
         "msg-signer", "evm", "hello world", vault_path_opt=vault_dir
