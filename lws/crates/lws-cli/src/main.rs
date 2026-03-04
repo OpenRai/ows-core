@@ -110,9 +110,9 @@ enum Commands {
     },
     /// List all saved wallets
     ListWallets,
-    /// Update lws to the latest version
+    /// Update lws to the latest release
     Update {
-        /// Force rebuild even if already on the latest commit
+        /// Re-download even if already on the latest version
         #[arg(long)]
         force: bool,
     },

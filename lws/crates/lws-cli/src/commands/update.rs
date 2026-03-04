@@ -1,66 +1,47 @@
 use std::path::PathBuf;
 use std::process::Command;
 
-const REPO: &str = "https://github.com/dawnlabsai/lws.git";
-const CURRENT_COMMIT: &str = env!("LWS_GIT_COMMIT");
+const REPO: &str = "dawnlabsai/lws";
+const CURRENT_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 pub fn run(force: bool) -> Result<(), crate::CliError> {
     let install_dir = install_dir();
 
-    // Check remote HEAD
-    let remote_commit = get_remote_head()?;
-    println!("installed: {CURRENT_COMMIT}");
-    println!("   remote: {remote_commit}");
+    let tag = get_latest_tag()?;
+    let latest_version = tag.strip_prefix('v').unwrap_or(&tag);
 
-    if !force && remote_commit.starts_with(CURRENT_COMMIT) {
+    println!("installed: v{CURRENT_VERSION}");
+    println!("   latest: {tag}");
+
+    if !force && latest_version == CURRENT_VERSION {
         println!("Already up to date.");
         return Ok(());
     }
 
     if force {
-        println!("Forcing rebuild...");
+        println!("Forcing update...");
     } else {
-        println!("Update available. Building...");
+        println!("Downloading update...");
     }
 
-    // Clone to temp dir
-    let tmp = tempfile::tempdir()
-        .map_err(|e| crate::CliError::InvalidArgs(format!("failed to create temp dir: {e}")))?;
+    let platform = detect_platform()?;
+    let binary_url = format!(
+        "https://github.com/{REPO}/releases/download/{tag}/lws-{platform}"
+    );
 
-    let clone_status = Command::new("git")
-        .args(["clone", "--depth", "1", REPO, tmp.path().to_str().unwrap(), "--quiet"])
-        .status()
-        .map_err(|e| crate::CliError::InvalidArgs(format!("failed to run git: {e}")))?;
+    let tmp = tempfile::NamedTempFile::new()
+        .map_err(|e| crate::CliError::InvalidArgs(format!("failed to create temp file: {e}")))?;
+    let tmp_path = tmp.path().to_path_buf();
 
-    if !clone_status.success() {
-        return Err(crate::CliError::InvalidArgs("git clone failed".to_string()));
-    }
+    // Download the binary
+    download_binary(&binary_url, &tmp_path)?;
 
-    // Build
-    let lws_dir = tmp.path().join("lws");
-    let build_status = Command::new("cargo")
-        .args(["build", "--workspace", "--release"])
-        .current_dir(&lws_dir)
-        .status()
-        .map_err(|e| crate::CliError::InvalidArgs(format!("failed to run cargo: {e}")))?;
-
-    if !build_status.success() {
-        return Err(crate::CliError::InvalidArgs("cargo build failed".to_string()));
-    }
-
-    // Copy binary
-    let built_bin = lws_dir.join("target/release/lws");
-    if !built_bin.exists() {
-        return Err(crate::CliError::InvalidArgs(
-            "built binary not found".to_string(),
-        ));
-    }
-
+    // Install it
     std::fs::create_dir_all(&install_dir)
         .map_err(|e| crate::CliError::InvalidArgs(format!("failed to create install dir: {e}")))?;
 
     let dest = install_dir.join("lws");
-    std::fs::copy(&built_bin, &dest)
+    std::fs::copy(&tmp_path, &dest)
         .map_err(|e| crate::CliError::InvalidArgs(format!("failed to copy binary: {e}")))?;
 
     #[cfg(unix)]
@@ -70,31 +51,85 @@ pub fn run(force: bool) -> Result<(), crate::CliError> {
             .map_err(|e| crate::CliError::InvalidArgs(format!("failed to set permissions: {e}")))?;
     }
 
-    println!("Updated lws to {remote_commit}");
+    println!("Updated lws to {tag}");
     Ok(())
 }
 
-fn get_remote_head() -> Result<String, crate::CliError> {
-    let output = Command::new("git")
-        .args(["ls-remote", REPO, "HEAD"])
+/// Fetch the latest release tag from GitHub API using curl.
+fn get_latest_tag() -> Result<String, crate::CliError> {
+    let api_url = format!("https://api.github.com/repos/{REPO}/releases/latest");
+
+    let output = Command::new("curl")
+        .args(["-fsSL", "-H", "Accept: application/vnd.github+json", &api_url])
         .output()
-        .map_err(|e| crate::CliError::InvalidArgs(format!("failed to run git ls-remote: {e}")))?;
+        .map_err(|e| crate::CliError::InvalidArgs(format!("failed to run curl: {e}")))?;
 
     if !output.status.success() {
         return Err(crate::CliError::InvalidArgs(
-            "git ls-remote failed — check your network connection".to_string(),
+            "failed to fetch latest release — check your network connection".to_string(),
         ));
     }
 
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let commit = stdout
-        .split_whitespace()
-        .next()
-        .unwrap_or("unknown")
-        .get(..7)
-        .unwrap_or("unknown");
+    let body = String::from_utf8_lossy(&output.stdout);
 
-    Ok(commit.to_string())
+    extract_json_string(&body, "tag_name")
+        .ok_or_else(|| crate::CliError::InvalidArgs(
+            "no releases found — push a version tag (e.g. v0.2.0) to create one".to_string(),
+        ))
+}
+
+/// Download a binary from a URL using curl.
+fn download_binary(url: &str, dest: &std::path::Path) -> Result<(), crate::CliError> {
+    let dest_str = dest.to_str().unwrap_or("download");
+
+    let status = Command::new("curl")
+        .args(["-fsSL", "-o", dest_str, url])
+        .status()
+        .map_err(|e| crate::CliError::InvalidArgs(format!("failed to run curl: {e}")))?;
+
+    if !status.success() {
+        return Err(crate::CliError::InvalidArgs(format!(
+            "failed to download binary from {url} — no prebuilt binary for your platform?"
+        )));
+    }
+
+    Ok(())
+}
+
+/// Detect the current platform in the same format as release assets.
+fn detect_platform() -> Result<String, crate::CliError> {
+    let os = if cfg!(target_os = "linux") {
+        "linux"
+    } else if cfg!(target_os = "macos") {
+        "darwin"
+    } else {
+        return Err(crate::CliError::InvalidArgs(
+            "unsupported OS for prebuilt binaries".to_string(),
+        ));
+    };
+
+    let arch = if cfg!(target_arch = "x86_64") {
+        "x86_64"
+    } else if cfg!(target_arch = "aarch64") {
+        "aarch64"
+    } else {
+        return Err(crate::CliError::InvalidArgs(
+            "unsupported architecture for prebuilt binaries".to_string(),
+        ));
+    };
+
+    Ok(format!("{os}-{arch}"))
+}
+
+/// Minimal JSON string extractor (avoids serde dependency for this one command).
+fn extract_json_string(json: &str, key: &str) -> Option<String> {
+    let pattern = format!("\"{}\"", key);
+    let idx = json.find(&pattern)?;
+    let rest = &json[idx + pattern.len()..];
+    // skip `: "`  or `:"`
+    let rest = rest.trim_start().strip_prefix(':')?.trim_start().strip_prefix('"')?;
+    let end = rest.find('"')?;
+    Some(rest[..end].to_string())
 }
 
 fn install_dir() -> PathBuf {
