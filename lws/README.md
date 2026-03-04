@@ -19,7 +19,7 @@ Rust implementation of the [Local Wallet Standard](https://localwalletstandard.o
 ## Quick Install
 
 ```bash
-curl -sSf https://openwallet.sh/install.sh | bash
+curl -fsSL https://openwallet.sh/install.sh | bash
 ```
 
 Or clone and install locally:

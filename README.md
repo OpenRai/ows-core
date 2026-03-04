@@ -41,7 +41,7 @@ Read the spec starting with [`docs/01-storage-format.md`](docs/01-storage-format
 Install the reference implementation:
 
 ```bash
-curl -sSf https://openwallet.sh/install.sh | bash
+curl -fsSL https://openwallet.sh/install.sh | bash
 ```
 
 Or build from source:
