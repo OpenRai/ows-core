@@ -190,7 +190,7 @@ install_python_bindings() {
   fi
 
   cd "$REPO_DIR/bindings/python"
-  maturin build --release
+  python3 -m maturin build --release
 
   local wheel
   wheel="$(find "$REPO_DIR/bindings/python/target/wheels" -name '*.whl' | head -1)"

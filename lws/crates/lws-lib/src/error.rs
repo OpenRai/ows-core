@@ -17,9 +17,6 @@ pub enum LwsLibError {
     #[error("invalid input: {0}")]
     InvalidInput(String),
 
-    #[error("invalid passphrase")]
-    InvalidPassphrase,
-
     #[error("broadcast failed: {0}")]
     BroadcastFailed(String),
 

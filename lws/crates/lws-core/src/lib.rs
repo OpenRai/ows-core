@@ -5,7 +5,7 @@ pub mod error;
 pub mod types;
 pub mod wallet_file;
 
-pub use caip::{AccountId, ChainId};
+pub use caip::ChainId;
 pub use chain::ChainType;
 pub use config::Config;
 pub use error::{LwsError, LwsErrorCode};

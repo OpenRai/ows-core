@@ -16,7 +16,6 @@ bech32 = "0.11"
 base64 = "0.22"
 bs58 = { version = "0.5", features = ["check"] }
 zeroize = { version = "1", features = ["derive"] }
-secrecy = "0.10"
 thiserror = "2"
 hex = "0.4"
 hmac = "0.12"

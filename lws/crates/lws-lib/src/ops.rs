@@ -409,22 +409,6 @@ pub fn sign_and_send(
     Ok(SendResult { tx_hash })
 }
 
-/// Get the current config.
-pub fn get_config(vault_path: Option<&Path>) -> Config {
-    match vault_path {
-        Some(p) => {
-            let config_path = p.join("config.json");
-            Config::load_or_default_from(&config_path)
-        }
-        None => Config::load_or_default(),
-    }
-}
-
-/// Get default RPC endpoints.
-pub fn get_default_rpc() -> std::collections::HashMap<String, String> {
-    Config::default_rpc()
-}
-
 // --- internal helpers ---
 
 /// Decrypt a wallet's secret material and return it as a string.
@@ -779,10 +763,4 @@ mod tests {
         assert!(err.is_err());
     }
 
-    #[test]
-    fn test_get_default_rpc() {
-        let rpc = get_default_rpc();
-        assert!(rpc.contains_key("eip155:1"));
-        assert!(rpc.contains_key("solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp"));
-    }
 }

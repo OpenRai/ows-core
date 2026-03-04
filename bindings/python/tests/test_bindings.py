@@ -1,7 +1,6 @@
 """Tests for lws Python bindings."""
 
 import tempfile
-import os
 import pytest
 import lws
 

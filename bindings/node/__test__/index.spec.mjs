@@ -100,7 +100,7 @@ describe('@lws/node', () => {
   });
 
   it('signs a transaction', () => {
-    const wallet = createWallet('signer', 'evm', PASSPHRASE, 12, vaultDir);
+    createWallet('signer', 'evm', PASSPHRASE, 12, vaultDir);
 
     const txHex = 'deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef';
     const result = signTransaction(
@@ -119,7 +119,7 @@ describe('@lws/node', () => {
   });
 
   it('signs a message', () => {
-    const wallet = createWallet('msg-signer', 'evm', PASSPHRASE, 12, vaultDir);
+    createWallet('msg-signer', 'evm', PASSPHRASE, 12, vaultDir);
 
     const result = signMessage(
       'msg-signer',

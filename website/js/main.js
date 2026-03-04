@@ -19,35 +19,3 @@ document.querySelectorAll('a[href^="#"]').forEach(anchor => {
     }
   });
 });
-
-// Active nav link highlighting on scroll
-const sections = document.querySelectorAll('section[id]');
-const navLinks = document.querySelectorAll('.header-nav a[href^="#"]');
-
-function updateActiveNav() {
-  const scrollPos = window.scrollY + 100;
-  sections.forEach(section => {
-    const top = section.offsetTop;
-    const height = section.offsetHeight;
-    const id = section.getAttribute('id');
-    if (scrollPos >= top && scrollPos < top + height) {
-      navLinks.forEach(link => {
-        link.style.color = '';
-        if (link.getAttribute('href') === '#' + id) {
-          link.style.color = 'var(--black)';
-        }
-      });
-    }
-  });
-}
-
-window.addEventListener('scroll', updateActiveNav);
-updateActiveNav();
-
-// Docs sidebar active state
-const sidebarLinks = document.querySelectorAll('.docs-sidebar a');
-sidebarLinks.forEach(link => {
-  if (link.href === window.location.href) {
-    link.classList.add('active');
-  }
-});
