@@ -4,8 +4,8 @@ set -euo pipefail
 REPO="dawnlabsai/lws"
 INSTALL_DIR="${LWS_INSTALL_DIR:-$HOME/.lws/bin}"
 
-info()  { printf '\033[1;34m==>\033[0m %s\n' "$*"; }
-warn()  { printf '\033[1;33mwarn:\033[0m %s\n' "$*"; }
+info()  { printf '\033[1;34m==>\033[0m %s\n' "$*" >&2; }
+warn()  { printf '\033[1;33mwarn:\033[0m %s\n' "$*" >&2; }
 err()   { printf '\033[1;31merror:\033[0m %s\n' "$*" >&2; exit 1; }
 
 TMPDIR=""
