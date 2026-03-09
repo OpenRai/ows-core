@@ -1,14 +1,22 @@
 // === Docs config ===
-var DOCS = [
-  { slug: '01-storage-format',           num: '01', title: '01 \u2014 Storage Format',           sidebar: '01 \u2014 Storage Format' },
-  { slug: '02-chain-agnostic-addressing', num: '02', title: '02 \u2014 Chain-Agnostic Addressing', sidebar: '02 \u2014 Addressing' },
-  { slug: '03-signing-interface',         num: '03', title: '03 \u2014 Signing Interface',         sidebar: '03 \u2014 Signing Interface' },
-  { slug: '04-policy-engine',             num: '04', title: '04 \u2014 Policy Engine',             sidebar: '04 \u2014 Policy Engine' },
-  { slug: '05-key-isolation',             num: '05', title: '05 \u2014 Key Isolation',             sidebar: '05 \u2014 Key Isolation' },
-  { slug: '06-agent-access-layer',        num: '06', title: '06 \u2014 Agent Access Layer',        sidebar: '06 \u2014 Agent Access' },
-  { slug: '07-multi-chain-support',       num: '07', title: '07 \u2014 Multi-Chain Support',       sidebar: '07 \u2014 Multi-Chain' },
-  { slug: '08-wallet-lifecycle',          num: '08', title: '08 \u2014 Wallet Lifecycle',          sidebar: '08 \u2014 Wallet Lifecycle' },
+var SPEC_DOCS = [
+  { slug: '01-storage-format',           title: '01 \u2014 Storage Format',           sidebar: '01 \u2014 Storage Format' },
+  { slug: '02-chain-agnostic-addressing', title: '02 \u2014 Chain-Agnostic Addressing', sidebar: '02 \u2014 Addressing' },
+  { slug: '03-signing-interface',         title: '03 \u2014 Signing Interface',         sidebar: '03 \u2014 Signing Interface' },
+  { slug: '04-policy-engine',             title: '04 \u2014 Policy Engine',             sidebar: '04 \u2014 Policy Engine' },
+  { slug: '05-key-isolation',             title: '05 \u2014 Key Isolation',             sidebar: '05 \u2014 Key Isolation' },
+  { slug: '06-agent-access-layer',        title: '06 \u2014 Agent Access Layer',        sidebar: '06 \u2014 Agent Access' },
+  { slug: '07-multi-chain-support',       title: '07 \u2014 Multi-Chain Support',       sidebar: '07 \u2014 Multi-Chain' },
+  { slug: '08-wallet-lifecycle',          title: '08 \u2014 Wallet Lifecycle',          sidebar: '08 \u2014 Wallet Lifecycle' },
 ];
+
+var SDK_DOCS = [
+  { slug: 'sdk-cli',    title: 'CLI Reference',    sidebar: 'CLI' },
+  { slug: 'sdk-node',   title: 'Node.js SDK',      sidebar: 'Node.js' },
+  { slug: 'sdk-python', title: 'Python SDK',       sidebar: 'Python' },
+];
+
+var DOCS = SPEC_DOCS.concat(SDK_DOCS);
 
 // Vercel build copies docs into website/docs/md/; local dev serves from repo root
 var DOCS_PATHS = ['md', '../../docs'];
@@ -59,10 +67,17 @@ function buildSidebar(currentSlug) {
 
   var html = '<div class="docs-sidebar-title">Specification</div>';
   html += '<a href="./">Overview</a>';
-  DOCS.forEach(function (doc) {
+  SPEC_DOCS.forEach(function (doc) {
     var active = doc.slug === currentSlug ? ' class="active"' : '';
     html += '<a href="doc.html?slug=' + doc.slug + '"' + active + '>' + doc.sidebar + '</a>';
   });
+
+  html += '<div class="docs-sidebar-title" style="margin-top: 1.5rem;">SDK Reference</div>';
+  SDK_DOCS.forEach(function (doc) {
+    var active = doc.slug === currentSlug ? ' class="active"' : '';
+    html += '<a href="doc.html?slug=' + doc.slug + '"' + active + '>' + doc.sidebar + '</a>';
+  });
+
   sidebar.innerHTML = html;
 }
 
