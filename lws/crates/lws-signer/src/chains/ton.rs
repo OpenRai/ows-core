@@ -35,17 +35,20 @@ impl TonSigner {
     }
 
     /// Compute the data cell hash for wallet v4r2 initial state.
-    /// Data cell: seqno(0, 32b) + subwallet_id(32b) + public_key(256b) = 320 bits, 0 refs.
+    /// Data: seqno(0, 32b) + subwallet_id(32b) + public_key(256b) + plugins(0, 1b) = 321 bits, 0 refs.
     fn data_cell_hash(public_key: &[u8; 32]) -> [u8; 32] {
+        // 321 bits = 40 full bytes + 1 bit
         let d1: u8 = 0; // 0 refs
-        let d2: u8 = 80; // ceil(320/8) + floor(320/8) = 40 + 40
+        let d2: u8 = 81; // ceil(321/8) + floor(321/8) = 41 + 40
 
-        let mut repr = Vec::with_capacity(42);
+        let mut repr = Vec::with_capacity(43);
         repr.push(d1);
         repr.push(d2);
         repr.extend_from_slice(&0u32.to_be_bytes()); // seqno = 0
         repr.extend_from_slice(&DEFAULT_SUBWALLET_ID.to_be_bytes());
         repr.extend_from_slice(public_key);
+        // Empty plugins dict (0) + completion tag (1) + padding (000000) = 0b01000000 = 0x40
+        repr.push(0x40);
 
         Sha256::digest(&repr).into()
     }
@@ -183,7 +186,7 @@ mod tests {
 
     #[test]
     fn test_data_cell_hash_matches_ton_core() {
-        // Null pubkey data cell hash verified against @ton/ton npm package
+        // Null pubkey init data cell hash verified against @ton/ton WalletContractV4
         let null_pubkey = [0u8; 32];
         let hash = TonSigner::data_cell_hash(&null_pubkey);
         assert_eq!(
