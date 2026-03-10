@@ -4,21 +4,23 @@ use ed25519_dalek::{Signer, SigningKey, VerifyingKey};
 use lws_core::ChainType;
 use sha2::{Digest, Sha256};
 
-/// TON chain signer (Ed25519, wallet v4r2 addresses).
+/// TON chain signer (Ed25519, wallet v5r1 addresses).
 pub struct TonSigner;
 
-/// Default subwallet_id for wallet v4r2.
-const DEFAULT_SUBWALLET_ID: u32 = 698983191;
-
-/// Wallet v4r2 code cell hash (SHA256 of the cell representation).
-/// Verified against @ton/ton npm package v15.
-const WALLET_V4R2_CODE_HASH: [u8; 32] = [
-    0xfe, 0xb5, 0xff, 0x68, 0x20, 0xe2, 0xff, 0x0d, 0x94, 0x83, 0xe7, 0xe0, 0xd6, 0x2c, 0x81, 0x7d,
-    0x84, 0x67, 0x89, 0xfb, 0x4a, 0xe5, 0x80, 0xc8, 0x78, 0x86, 0x6d, 0x95, 0x9d, 0xab, 0xd5, 0xc0,
+/// Wallet v5r1 code cell hash (SHA256 of the cell representation).
+/// Verified against @ton/ton WalletContractV5R1.
+const WALLET_V5R1_CODE_HASH: [u8; 32] = [
+    0x20, 0x83, 0x4b, 0x7b, 0x72, 0xb1, 0x12, 0x14, 0x7e, 0x1b, 0x2f, 0xb4, 0x57, 0xb8, 0x4e, 0x74,
+    0xd1, 0xa3, 0x0f, 0x04, 0xf7, 0x37, 0xd4, 0xf6, 0x2a, 0x66, 0x8e, 0x95, 0x52, 0xd2, 0xb7, 0x2f,
 ];
 
-/// Wallet v4r2 code cell depth.
-const WALLET_V4R2_CODE_DEPTH: u16 = 7;
+/// Wallet v5r1 code cell depth.
+const WALLET_V5R1_CODE_DEPTH: u16 = 6;
+
+/// Default walletId for mainnet workchain 0.
+/// Computed as: networkGlobalId(-239) XOR context(0x80000000)
+/// context = 1(1b) + workchain(0, 8b) + version(0, 8b) + subwalletNumber(0, 15b)
+const DEFAULT_WALLET_ID: i32 = 0x7FFFFF11u32 as i32;
 
 impl TonSigner {
     fn signing_key(private_key: &[u8]) -> Result<SigningKey, SignerError> {
@@ -28,21 +30,80 @@ impl TonSigner {
         Ok(SigningKey::from_bytes(&key_bytes))
     }
 
-    /// Compute the data cell hash for wallet v4r2 initial state.
-    /// Data: seqno(0, 32b) + subwallet_id(32b) + public_key(256b) + plugins(0, 1b) = 321 bits, 0 refs.
+    /// Compute the data cell hash for wallet v5r1 initial state.
+    /// Data: is_sig_allowed(1b) + seqno(0, 32b) + walletId(32b) + pubkey(256b) + extensions(0, 1b)
+    /// = 322 bits, 0 refs.
     fn data_cell_hash(public_key: &[u8; 32]) -> [u8; 32] {
-        // 321 bits = 40 full bytes + 1 bit
+        // 322 bits: 40 full bytes + 2 extra bits
         let d1: u8 = 0; // 0 refs
-        let d2: u8 = 81; // ceil(321/8) + floor(321/8) = 41 + 40
+        let d2: u8 = 81; // ceil(322/8) + floor(322/8) = 41 + 40
 
-        let mut repr = Vec::with_capacity(43);
+        // Build the 322-bit data as a byte stream.
+        // Bit layout (MSB first within each byte):
+        //   bit 0:       is_signature_allowed = 1
+        //   bits 1-32:   seqno = 0 (32 bits)
+        //   bits 33-64:  walletId as int32 (32 bits)
+        //   bits 65-320: public_key (256 bits)
+        //   bit 321:     extensions = 0
+        // Then completion tag: bit 322 = 1, bits 323-327 = 0
+        //
+        // Byte 0:  1_0000000  (is_sig=1, seqno MSBs = 0)
+        // Bytes 1-3: 00000000 (seqno continued)
+        // Byte 4:  0_0111111  (seqno LSB=0, then walletId top 7 bits)
+        //   walletId = 0x7FFFFF11:
+        //     binary: 01111111 11111111 11111111 00010001
+        //   shifted right by 1 bit into the stream starting at bit 33:
+        // This is complex to hand-encode, so we build it programmatically.
+
+        let wallet_id_bytes = DEFAULT_WALLET_ID.to_be_bytes();
+
+        // Pack bits into bytes: [1-bit flag] [32-bit seqno] [32-bit walletId] [256-bit key] [1-bit ext]
+        // = 322 bits total. We'll use a simple bit packer.
+        let mut bits = Vec::with_capacity(328);
+
+        // is_signature_allowed = 1
+        bits.push(1u8);
+
+        // seqno = 0 (32 bits)
+        bits.extend(std::iter::repeat_n(0u8, 32));
+
+        // walletId (32 bits, big-endian)
+        for &b in &wallet_id_bytes {
+            for shift in (0..8).rev() {
+                bits.push((b >> shift) & 1);
+            }
+        }
+
+        // public_key (256 bits)
+        for &b in public_key {
+            for shift in (0..8).rev() {
+                bits.push((b >> shift) & 1);
+            }
+        }
+
+        // extensions = 0
+        bits.push(0);
+
+        // Add completion tag: 1 followed by zeros to fill the byte
+        bits.push(1);
+        while bits.len() % 8 != 0 {
+            bits.push(0);
+        }
+
+        // Convert bit array to bytes
+        let mut data_bytes = Vec::with_capacity(bits.len() / 8);
+        for chunk in bits.chunks(8) {
+            let mut byte = 0u8;
+            for (i, &bit) in chunk.iter().enumerate() {
+                byte |= bit << (7 - i);
+            }
+            data_bytes.push(byte);
+        }
+
+        let mut repr = Vec::with_capacity(2 + data_bytes.len());
         repr.push(d1);
         repr.push(d2);
-        repr.extend_from_slice(&0u32.to_be_bytes()); // seqno = 0
-        repr.extend_from_slice(&DEFAULT_SUBWALLET_ID.to_be_bytes());
-        repr.extend_from_slice(public_key);
-        // Empty plugins dict (0) + completion tag (1) + padding (000000) = 0b01000000 = 0x40
-        repr.push(0x40);
+        repr.extend_from_slice(&data_bytes);
 
         Sha256::digest(&repr).into()
     }
@@ -109,7 +170,7 @@ impl ChainSigner for TonSigner {
 
         let data_hash = Self::data_cell_hash(pubkey_bytes);
         let state_hash =
-            Self::state_init_hash(&WALLET_V4R2_CODE_HASH, WALLET_V4R2_CODE_DEPTH, &data_hash);
+            Self::state_init_hash(&WALLET_V5R1_CODE_HASH, WALLET_V5R1_CODE_DEPTH, &data_hash);
 
         Ok(Self::encode_address(0, &state_hash, true))
     }
@@ -168,29 +229,29 @@ mod tests {
     #[test]
     fn test_code_hash_constant() {
         assert_eq!(
-            hex::encode(WALLET_V4R2_CODE_HASH),
-            "feb5ff6820e2ff0d9483e7e0d62c817d846789fb4ae580c878866d959dabd5c0"
+            hex::encode(WALLET_V5R1_CODE_HASH),
+            "20834b7b72b112147e1b2fb457b84e74d1a30f04f737d4f62a668e9552d2b72f"
         );
     }
 
     #[test]
     fn test_data_cell_hash_matches_ton_core() {
-        // Null pubkey init data cell hash verified against @ton/ton WalletContractV4
+        // Null pubkey data cell hash verified against @ton/ton WalletContractV5R1
         let null_pubkey = [0u8; 32];
         let hash = TonSigner::data_cell_hash(&null_pubkey);
         assert_eq!(
             hex::encode(hash),
-            "a8ee56af92eb3de1a48c2a001803c2c30ed0d601a766265d6fd721813022d782"
+            "0f80a4e3e2630cba3f6f37d12dbcf6afaaa015cd889eeb681a334a4fbe84cf31"
         );
     }
 
     #[test]
     fn test_known_address() {
-        // Address verified against @ton/ton WalletContractV4.create()
+        // Address verified against @ton/ton WalletContractV5R1.create()
         // Private key: 9d61b19d... -> Public key: d75a9801...
         let signer = TonSigner;
         let address = signer.derive_address(&test_privkey()).unwrap();
-        assert_eq!(address, "EQDNrJfJFisuFBrURjgosqcO_fh2K5foNWPzUr7PkC6Ipopv");
+        assert_eq!(address, "EQCUp64SJJ505dIdcgHDG1oD8JKMLXpQzu5W6lLFdQGtA5Td");
     }
 
     #[test]
