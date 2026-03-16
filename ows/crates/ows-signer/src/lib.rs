@@ -103,38 +103,40 @@ mod integration_tests {
         let mnemonic = Mnemonic::from_phrase(ABANDON_PHRASE).unwrap();
         let address = derive_address_for_chain(&mnemonic, ChainType::Spark);
         assert!(
-            address.starts_with("spark:identity:"),
-            "Spark default address should start with spark:identity:, got: {}",
+            address.starts_with("spark:"),
+            "Spark address should start with spark:, got: {}",
             address
         );
     }
 
     #[test]
-    fn test_spark_all_key_types() {
-        use chains::spark::{SparkKeyType, SparkSigner};
-
+    fn test_spark_uses_bitcoin_derivation_path() {
         let mnemonic = Mnemonic::from_phrase(ABANDON_PHRASE).unwrap();
-        let mut addresses = Vec::new();
-        for key_type in &SparkKeyType::ALL {
-            let signer = SparkSigner::new(*key_type);
-            let path = signer.default_derivation_path(0);
-            let key =
-                HdDeriver::derive_from_mnemonic(&mnemonic, "", &path, Curve::Secp256k1).unwrap();
-            let address = signer.derive_address(key.expose()).unwrap();
-            assert!(
-                address.starts_with(&format!("spark:{}:", key_type.label())),
-                "unexpected prefix: {}",
-                address
-            );
-            addresses.push(address);
-        }
-        assert_eq!(addresses.len(), 5);
-        // All addresses should be distinct (different derivation paths → different keys)
-        for i in 0..addresses.len() {
-            for j in (i + 1)..addresses.len() {
-                assert_ne!(addresses[i], addresses[j]);
-            }
-        }
+        let btc_signer = signer_for_chain(ChainType::Bitcoin);
+        let spark_signer = signer_for_chain(ChainType::Spark);
+
+        // Same derivation path
+        assert_eq!(
+            btc_signer.default_derivation_path(0),
+            spark_signer.default_derivation_path(0),
+        );
+
+        // Same derived key
+        let btc_key = HdDeriver::derive_from_mnemonic(
+            &mnemonic,
+            "",
+            &btc_signer.default_derivation_path(0),
+            Curve::Secp256k1,
+        )
+        .unwrap();
+        let spark_key = HdDeriver::derive_from_mnemonic(
+            &mnemonic,
+            "",
+            &spark_signer.default_derivation_path(0),
+            Curve::Secp256k1,
+        )
+        .unwrap();
+        assert_eq!(btc_key.expose(), spark_key.expose());
     }
 
     #[test]

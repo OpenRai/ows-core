@@ -26,6 +26,6 @@ pub fn signer_for_chain(chain: ChainType) -> Box<dyn ChainSigner> {
         ChainType::Cosmos => Box::new(CosmosSigner::cosmos_hub()),
         ChainType::Tron => Box::new(TronSigner),
         ChainType::Ton => Box::new(TonSigner),
-        ChainType::Spark => Box::new(SparkSigner::identity()),
+        ChainType::Spark => Box::new(SparkSigner),
     }
 }

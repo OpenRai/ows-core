@@ -8,6 +8,7 @@ bindings/python/*.egg-info/
 __pycache__/
 *.pyc
 *.so
+*.dSYM/
 
 # Node bindings
 bindings/node/node_modules/

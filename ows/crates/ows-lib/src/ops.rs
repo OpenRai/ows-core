@@ -6,9 +6,8 @@ use ows_core::{
     ALL_CHAIN_TYPES,
 };
 use ows_signer::{
-    chains::spark::{SparkKeyType, SparkSigner},
-    decrypt, encrypt, signer_for_chain, ChainSigner, CryptoEnvelope, HdDeriver, Mnemonic,
-    MnemonicStrength, SecretBytes,
+    decrypt, encrypt, signer_for_chain, CryptoEnvelope, HdDeriver, Mnemonic, MnemonicStrength,
+    SecretBytes,
 };
 
 use crate::error::OwsLibError;
@@ -39,29 +38,9 @@ fn parse_chain(s: &str) -> Result<ows_core::Chain, OwsLibError> {
 
 /// Derive accounts for all chain families from a mnemonic at the given index.
 fn derive_all_accounts(mnemonic: &Mnemonic, index: u32) -> Result<Vec<WalletAccount>, OwsLibError> {
-    let mut accounts = Vec::with_capacity(ALL_CHAIN_TYPES.len() + 4); // +4 for extra Spark keys
+    let mut accounts = Vec::with_capacity(ALL_CHAIN_TYPES.len());
     for ct in &ALL_CHAIN_TYPES {
         let chain = default_chain_for_type(*ct);
-
-        // Spark: derive all 5 key types instead of the single default
-        if *ct == ChainType::Spark {
-            for key_type in &SparkKeyType::ALL {
-                let signer = SparkSigner::new(*key_type);
-                let path = signer.default_derivation_path(index);
-                let curve = signer.curve();
-                let key = HdDeriver::derive_from_mnemonic(mnemonic, "", &path, curve)?;
-                let address = signer.derive_address(key.expose())?;
-                let account_id = format!("{}:{}", chain.chain_id, address);
-                accounts.push(WalletAccount {
-                    account_id,
-                    address,
-                    chain_id: chain.chain_id.to_string(),
-                    derivation_path: path,
-                });
-            }
-            continue;
-        }
-
         let signer = signer_for_chain(*ct);
         let path = signer.default_derivation_path(index);
         let curve = signer.curve();
@@ -133,29 +112,12 @@ impl KeyPair {
 
 /// Derive accounts for all chain families using a key pair (one key per curve).
 fn derive_all_accounts_from_keys(keys: &KeyPair) -> Result<Vec<WalletAccount>, OwsLibError> {
-    let mut accounts = Vec::with_capacity(ALL_CHAIN_TYPES.len() + 4);
+    let mut accounts = Vec::with_capacity(ALL_CHAIN_TYPES.len());
     for ct in &ALL_CHAIN_TYPES {
-        let chain = default_chain_for_type(*ct);
-
-        // Spark: derive all 5 key types from the same secp256k1 key
-        if *ct == ChainType::Spark {
-            for key_type in &SparkKeyType::ALL {
-                let signer = SparkSigner::new(*key_type);
-                let key = keys.key_for_curve(signer.curve());
-                let address = signer.derive_address(key)?;
-                accounts.push(WalletAccount {
-                    account_id: format!("{}:{}", chain.chain_id, address),
-                    address,
-                    chain_id: chain.chain_id.to_string(),
-                    derivation_path: String::new(),
-                });
-            }
-            continue;
-        }
-
         let signer = signer_for_chain(*ct);
         let key = keys.key_for_curve(signer.curve());
         let address = signer.derive_address(key)?;
+        let chain = default_chain_for_type(*ct);
         accounts.push(WalletAccount {
             account_id: format!("{}:{}", chain.chain_id, address),
             address,
@@ -932,7 +894,7 @@ mod tests {
         let vault = dir.path();
         create_wallet("multi-sign", None, None, Some(vault)).unwrap();
 
-        let chains = ["evm", "solana", "bitcoin", "cosmos", "tron", "ton"];
+        let chains = ["evm", "solana", "bitcoin", "cosmos", "tron", "ton", "spark"];
         for chain in &chains {
             let result = sign_message(
                 "multi-sign",
@@ -970,7 +932,7 @@ mod tests {
         solana_tx.extend_from_slice(&[0xDE, 0xAD, 0xBE, 0xEF]); // message payload
         let solana_tx_hex = hex::encode(&solana_tx);
 
-        let chains = ["evm", "solana", "bitcoin", "cosmos", "tron", "ton"];
+        let chains = ["evm", "solana", "bitcoin", "cosmos", "tron", "ton", "spark"];
         for chain in &chains {
             let tx = if *chain == "solana" {
                 &solana_tx_hex
@@ -1136,8 +1098,8 @@ mod tests {
 
         assert_eq!(
             info.accounts.len(),
-            11,
-            "should have all chain accounts (6 base + 5 spark)"
+            6,
+            "should have one account per chain type"
         );
 
         // Sign on EVM (secp256k1)
