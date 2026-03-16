@@ -11,7 +11,6 @@ var SPEC_DOCS = [
 ];
 
 var SDK_DOCS = [
-  { slug: 'sdk-cli',    title: 'CLI Reference',    sidebar: 'CLI' },
   { slug: 'sdk-node',   title: 'Node.js SDK',      sidebar: 'Node.js' },
   { slug: 'sdk-python', title: 'Python SDK',       sidebar: 'Python' },
 ];
