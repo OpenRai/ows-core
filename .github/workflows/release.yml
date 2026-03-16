@@ -21,6 +21,9 @@ jobs:
           V="${GITHUB_REF_NAME#v}"
           "$GITHUB_WORKSPACE/scripts/set-version.sh" "$V" --all
 
+      - name: Generate READMEs
+        run: ./readme/generate.sh
+
       - name: Commit version bump
         run: |
           git config user.name "github-actions[bot]"

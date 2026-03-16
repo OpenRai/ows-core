@@ -39,7 +39,11 @@ render_template() {
 # template_name:output_path pairs
 TARGETS="node:bindings/node/README.md
 python:bindings/python/README.md
-ows:ows/README.md"
+ows:ows/README.md
+ows:ows/crates/ows-core/README.md
+ows:ows/crates/ows-signer/README.md
+ows:ows/crates/ows-lib/README.md
+ows:ows/crates/ows-cli/README.md"
 
 failures=0
 
