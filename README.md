@@ -1,4 +1,4 @@
-# OWS — Open Wallet Standard
+# OWS — Open Wallet Standard.
 
 Secure signing and wallet management for every chain. One vault, one interface — keys never leave your machine.
 
