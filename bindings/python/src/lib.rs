@@ -87,12 +87,12 @@ fn import_wallet_private_key(
 fn list_wallets(vault_path_opt: Option<String>) -> PyResult<PyObject> {
     let wallets = ows_lib::list_wallets(vault_path(vault_path_opt).as_deref()).map_err(map_err)?;
     Python::with_gil(|py| {
-        let list = pyo3::types::PyList::empty_bound(py);
+        let list = pyo3::types::PyList::empty(py);
         for w in &wallets {
             let dict = wallet_info_to_dict_inner(py, w)?;
             list.append(dict)?;
         }
-        Ok(list.to_object(py))
+        Ok(list.unbind().into())
     })
 }
 
@@ -153,10 +153,10 @@ fn sign_transaction(
     .map_err(map_err)?;
 
     Python::with_gil(|py| {
-        let dict = pyo3::types::PyDict::new_bound(py);
+        let dict = pyo3::types::PyDict::new(py);
         dict.set_item("signature", &result.signature)?;
         dict.set_item("recovery_id", result.recovery_id)?;
-        Ok(dict.to_object(py))
+        Ok(dict.unbind().into())
     })
 }
 
@@ -179,10 +179,10 @@ fn sign_message(
     .map_err(map_err)?;
 
     Python::with_gil(|py| {
-        let dict = pyo3::types::PyDict::new_bound(py);
+        let dict = pyo3::types::PyDict::new(py);
         dict.set_item("signature", &result.signature)?;
         dict.set_item("recovery_id", result.recovery_id)?;
-        Ok(dict.to_object(py))
+        Ok(dict.unbind().into())
     })
 }
 
@@ -205,28 +205,28 @@ fn sign_and_send(
     .map_err(map_err)?;
 
     Python::with_gil(|py| {
-        let dict = pyo3::types::PyDict::new_bound(py);
+        let dict = pyo3::types::PyDict::new(py);
         dict.set_item("tx_hash", &result.tx_hash)?;
-        Ok(dict.to_object(py))
+        Ok(dict.unbind().into())
     })
 }
 
 fn wallet_info_to_dict(py: Python<'_>, info: &ows_lib::WalletInfo) -> PyResult<PyObject> {
     let dict = wallet_info_to_dict_inner(py, info)?;
-    Ok(dict.to_object(py))
+    Ok(dict.unbind().into())
 }
 
 fn wallet_info_to_dict_inner<'py>(
     py: Python<'py>,
     info: &ows_lib::WalletInfo,
 ) -> PyResult<pyo3::Bound<'py, pyo3::types::PyDict>> {
-    let dict = pyo3::types::PyDict::new_bound(py);
+    let dict = pyo3::types::PyDict::new(py);
     dict.set_item("id", &info.id)?;
     dict.set_item("name", &info.name)?;
 
-    let accounts_list = pyo3::types::PyList::empty_bound(py);
+    let accounts_list = pyo3::types::PyList::empty(py);
     for acct in &info.accounts {
-        let acct_dict = pyo3::types::PyDict::new_bound(py);
+        let acct_dict = pyo3::types::PyDict::new(py);
         acct_dict.set_item("chain_id", &acct.chain_id)?;
         acct_dict.set_item("address", &acct.address)?;
         acct_dict.set_item("derivation_path", &acct.derivation_path)?;

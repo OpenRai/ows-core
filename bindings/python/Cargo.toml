@@ -10,4 +10,4 @@ crate-type = ["cdylib"]
 
 [dependencies]
 ows-lib = { path = "../../ows/crates/ows-lib" }
-pyo3 = { version = "0.22", features = ["extension-module"] }
+pyo3 = { version = "0.24.1", features = ["extension-module"] }
