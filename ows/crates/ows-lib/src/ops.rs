@@ -455,6 +455,35 @@ pub fn sign_message(
     })
 }
 
+/// Sign EIP-712 typed structured data. Returns hex-encoded signature.
+/// Only supported for EVM chains.
+pub fn sign_typed_data(
+    wallet: &str,
+    chain: &str,
+    typed_data_json: &str,
+    passphrase: Option<&str>,
+    index: Option<u32>,
+    vault_path: Option<&Path>,
+) -> Result<SignResult, OwsLibError> {
+    let passphrase = passphrase.unwrap_or("");
+    let chain = parse_chain(chain)?;
+
+    if chain.chain_type != ows_core::ChainType::Evm {
+        return Err(OwsLibError::InvalidInput(
+            "EIP-712 typed data signing is only supported for EVM chains".into(),
+        ));
+    }
+
+    let key = decrypt_signing_key(wallet, chain.chain_type, passphrase, index, vault_path)?;
+    let evm_signer = ows_signer::chains::EvmSigner;
+    let output = evm_signer.sign_typed_data(key.expose(), typed_data_json)?;
+
+    Ok(SignResult {
+        signature: hex::encode(&output.signature),
+        recovery_id: output.recovery_id,
+    })
+}
+
 /// Sign and broadcast a transaction. Returns the transaction hash.
 pub fn sign_and_send(
     wallet: &str,
@@ -1544,5 +1573,64 @@ mod tests {
             full_signed_tx[0], 0x02,
             "full signed EIP-1559 tx must start with type byte 0x02"
         );
+    }
+
+    // ================================================================
+    // EIP-712 TYPED DATA SIGNING
+    // ================================================================
+
+    #[test]
+    fn sign_typed_data_rejects_non_evm_chain() {
+        let tmp = tempfile::tempdir().unwrap();
+        let vault = tmp.path();
+
+        let w = save_privkey_wallet("typed-data-test", TEST_PRIVKEY, "pass", vault);
+
+        let typed_data = r#"{
+            "types": {
+                "EIP712Domain": [{"name": "name", "type": "string"}],
+                "Test": [{"name": "value", "type": "uint256"}]
+            },
+            "primaryType": "Test",
+            "domain": {"name": "Test"},
+            "message": {"value": "1"}
+        }"#;
+
+        let result = sign_typed_data(&w.id, "solana", typed_data, Some("pass"), None, Some(vault));
+        assert!(result.is_err());
+        let err_msg = result.unwrap_err().to_string();
+        assert!(
+            err_msg.contains("only supported for EVM"),
+            "expected EVM-only error, got: {err_msg}"
+        );
+    }
+
+    #[test]
+    fn sign_typed_data_evm_succeeds() {
+        let tmp = tempfile::tempdir().unwrap();
+        let vault = tmp.path();
+
+        let w = save_privkey_wallet("typed-data-evm", TEST_PRIVKEY, "pass", vault);
+
+        let typed_data = r#"{
+            "types": {
+                "EIP712Domain": [
+                    {"name": "name", "type": "string"},
+                    {"name": "version", "type": "string"},
+                    {"name": "chainId", "type": "uint256"}
+                ],
+                "Test": [{"name": "value", "type": "uint256"}]
+            },
+            "primaryType": "Test",
+            "domain": {"name": "TestDapp", "version": "1", "chainId": "1"},
+            "message": {"value": "42"}
+        }"#;
+
+        let result = sign_typed_data(&w.id, "evm", typed_data, Some("pass"), None, Some(vault));
+        assert!(result.is_ok(), "sign_typed_data failed: {:?}", result.err());
+
+        let sign_result = result.unwrap();
+        assert!(!sign_result.signature.is_empty(), "signature should not be empty");
+        assert!(sign_result.recovery_id.is_some(), "recovery_id should be present for EVM");
     }
 }

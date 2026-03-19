@@ -248,6 +248,31 @@ pub fn sign_message(
     .map_err(map_err)
 }
 
+/// Sign EIP-712 typed structured data (EVM only). Returns hex-encoded signature.
+#[napi]
+pub fn sign_typed_data(
+    wallet: String,
+    chain: String,
+    typed_data_json: String,
+    passphrase: Option<String>,
+    index: Option<u32>,
+    vault_path_opt: Option<String>,
+) -> Result<SignResult> {
+    ows_lib::sign_typed_data(
+        &wallet,
+        &chain,
+        &typed_data_json,
+        passphrase.as_deref(),
+        index,
+        vault_path(vault_path_opt).as_deref(),
+    )
+    .map(|r| SignResult {
+        signature: r.signature,
+        recovery_id: r.recovery_id.map(|v| v as u32),
+    })
+    .map_err(map_err)
+}
+
 /// Sign and broadcast a transaction. Returns the transaction hash.
 #[napi]
 pub fn sign_and_send(

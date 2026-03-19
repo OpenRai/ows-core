@@ -186,6 +186,31 @@ fn sign_message(
     })
 }
 
+/// Sign EIP-712 typed structured data (EVM only).
+#[pyfunction]
+#[pyo3(signature = (wallet, chain, typed_data_json, passphrase=None, index=None, vault_path_opt=None))]
+fn sign_typed_data(
+    wallet: &str,
+    chain: &str,
+    typed_data_json: &str,
+    passphrase: Option<&str>,
+    index: Option<u32>,
+    vault_path_opt: Option<String>,
+) -> PyResult<PyObject> {
+    let result = ows_lib::sign_typed_data(
+        wallet, chain, typed_data_json, passphrase, index,
+        vault_path(vault_path_opt).as_deref(),
+    )
+    .map_err(map_err)?;
+
+    Python::with_gil(|py| {
+        let dict = pyo3::types::PyDict::new(py);
+        dict.set_item("signature", &result.signature)?;
+        dict.set_item("recovery_id", result.recovery_id)?;
+        Ok(dict.unbind().into())
+    })
+}
+
 /// Sign and broadcast a transaction.
 #[pyfunction]
 #[pyo3(signature = (wallet, chain, tx_hex, passphrase=None, index=None, rpc_url=None, vault_path_opt=None))]
@@ -253,6 +278,7 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(rename_wallet, m)?)?;
     m.add_function(wrap_pyfunction!(sign_transaction, m)?)?;
     m.add_function(wrap_pyfunction!(sign_message, m)?)?;
+    m.add_function(wrap_pyfunction!(sign_typed_data, m)?)?;
     m.add_function(wrap_pyfunction!(sign_and_send, m)?)?;
     Ok(())
 }
