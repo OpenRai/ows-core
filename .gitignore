@@ -2,6 +2,8 @@
 **/target/
 .claude
 
+gtm
+
 # Python bindings
 bindings/python/.venv/
 bindings/python/*.egg-info/

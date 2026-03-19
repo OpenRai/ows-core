@@ -90,69 +90,67 @@
     <div class="section-full-inner">
       <span class="section-label" style="color: var(--gray-500);">The Problem</span>
       <h2 class="section-title" style="color: var(--white);">Every tool reinvents the wallet</h2>
-      <p class="section-description" style="color: var(--gray-400); max-width: 680px;">
-        Every CLI, agent, and script that touches a blockchain implements its own wallet management from scratch.
-        Foundry stores keys one way. Hardhat expects environment variables. Your trading bot has its own keystore.
-        Your AI agent can't access wallets created by your deployment tool.
-        The result: N tools &times; M chains = N&times;M integration problems, and keys scattered across dotfiles, env vars, and proprietary formats with no shared security model.
+      <p class="section-description" style="color: var(--gray-400); max-width: 620px;">
+        Every CLI, agent, and script implements its own key management. The result: keys scattered everywhere with no shared security.
       </p>
 
-      <div class="problem-diagrams">
-        <div class="problem-diagram">
-          <div class="problem-diagram-label">Today &mdash; fragmented</div>
-          <div class="architecture" style="background: var(--gray-800); border-color: var(--gray-700);">
-<pre style="color: var(--gray-400);">
- dawn-cli ──── own keystore ──── EVM
- foundry  ──── cast wallet  ──── EVM
- hardhat  ──── .env vars    ──── EVM
- solana-cli ── own keystore ──── Solana
- agent-x  ──── cloud API    ──── EVM + Solana
- your-bot ──── custom JSON  ──── ???
+      <div class="problem-terminals" id="problem-terminals">
 
- 6 tools. 6 key formats. 6 security models.
- None of them talk to each other.
-</pre>
+        <!-- Before: The Mess -->
+        <div class="problem-terminal problem-terminal--chaos">
+          <div class="problem-terminal-chrome">
+            <div class="terminal-dots"><span></span><span></span><span></span></div>
+            <span class="problem-terminal-title">today</span>
           </div>
+          <div class="problem-terminal-body">
+            <div class="problem-line" data-line="0"><span class="t-x">&times;</span> <span class="t-dim">foundry</span>    ~/.foundry/keystores/</div>
+            <div class="problem-line" data-line="1"><span class="t-x">&times;</span> <span class="t-dim">hardhat</span>    .env <span class="t-leak">PRIVATE_KEY=0xab3f...</span></div>
+            <div class="problem-line" data-line="2"><span class="t-x">&times;</span> <span class="t-dim">solana</span>     ~/.config/solana/id.json</div>
+            <div class="problem-line" data-line="3"><span class="t-x">&times;</span> <span class="t-dim">agent-x</span>    .env.local <span class="t-leak">SIGNER=0x91c...</span></div>
+            <div class="problem-line" data-line="4"><span class="t-x">&times;</span> <span class="t-dim">your-bot</span>   ./config/wallet.json</div>
+            <div class="problem-line problem-line--danger" data-line="5"><span class="t-x">&times;</span> <span class="t-dim">.zsh_history</span> <span class="t-danger">export PRIVATE_KEY=0x...</span></div>
+          </div>
+          <div class="problem-terminal-big-number"><span class="big-num big-num--red">6</span> formats &middot; 6 locations &middot; 0 encryption</div>
         </div>
-        <div class="problem-diagram">
-          <div class="problem-diagram-label">With OWS &mdash; one interface</div>
-          <div class="architecture" style="background: var(--gray-800); border-color: var(--gray-700);">
-<pre style="color: var(--gray-300);">
- dawn-cli ─────┐
- foundry  ─────┤
- hardhat  ─────┤
- solana-cli ───┼──── <span style="color: #22c55e; font-weight: 700;">OWS</span> ──── All chains
- agent-x  ─────┤
- your-bot ─────┘
 
- Any tool. One vault. One security model.
- A wallet created by one tool works in every other.
-</pre>
-          </div>
+        <!-- Arrow -->
+        <div class="problem-arrow" id="problem-arrow">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M5 12h14M13 5l7 7-7 7"/>
+          </svg>
         </div>
+
+        <!-- After: OWS -->
+        <div class="problem-terminal problem-terminal--unified">
+          <div class="problem-terminal-chrome">
+            <div class="terminal-dots"><span></span><span></span><span></span></div>
+            <span class="problem-terminal-title">with OWS</span>
+          </div>
+          <div class="problem-terminal-body">
+            <div class="problem-line" data-line="0"><span class="t-check">&#10003;</span> <span class="t-green">deployer</span>   all chains</div>
+            <div class="problem-line" data-line="1"><span class="t-check">&#10003;</span> <span class="t-green">trading</span>    evm, solana</div>
+            <div class="problem-line" data-line="2"><span class="t-check">&#10003;</span> <span class="t-green">agent</span>      all chains</div>
+          </div>
+          <div class="problem-terminal-big-number"><span class="big-num big-num--green">1</span> vault &middot; 1 interface &middot; AES-256-GCM</div>
+        </div>
+
       </div>
 
-      <div class="problem-points">
-        <div class="problem-point">
-          <div class="problem-point-icon" style="color: var(--red);">&times;</div>
-          <div>
-            <strong style="color: var(--white);">No portability.</strong>
-            <span style="color: var(--gray-400);">Create a wallet in one CLI, re-import it into every other tool manually. Export, copy, paste private keys between tools. Every migration is a security risk.</span>
-          </div>
+      <div class="problem-stats" id="problem-stats">
+        <div class="problem-stat">
+          <div class="problem-stat-before"><span class="t-dim">6 formats</span></div>
+          <div class="problem-stat-arrow">&rarr;</div>
+          <div class="problem-stat-after">1 standard</div>
         </div>
-        <div class="problem-point">
-          <div class="problem-point-icon" style="color: var(--red);">&times;</div>
-          <div>
-            <strong style="color: var(--white);">No shared security.</strong>
-            <span style="color: var(--gray-400);">Each tool invents its own key storage, its own encryption, its own access control. Some get it right. Many don't. Private keys end up in plaintext env vars and shell history.</span>
-          </div>
+        <div class="problem-stat">
+          <div class="problem-stat-before"><span class="t-dim">plaintext keys</span></div>
+          <div class="problem-stat-arrow">&rarr;</div>
+          <div class="problem-stat-after">AES-256-GCM</div>
         </div>
-        <div class="problem-point">
-          <div class="problem-point-icon" style="color: var(--red);">&times;</div>
-          <div>
-            <strong style="color: var(--white);">No single point of access.</strong>
-            <span style="color: var(--gray-400);">There's no standard way for a CLI, agent, or application to say "give me a wallet and let me sign." Every integration is bespoke. Every new tool starts from zero.</span>
-          </div>
+        <div class="problem-stat">
+          <div class="problem-stat-before"><span class="t-dim">per-tool silos</span></div>
+          <div class="problem-stat-arrow">&rarr;</div>
+          <div class="problem-stat-after">shared vault</div>
         </div>
       </div>
     </div>
@@ -214,33 +212,6 @@
     <p class="section-description">
       Agents talk to the Access Layer. The Access Layer enforces policies, delegates signing to an isolated enclave, and never exposes key material upstream.
     </p>
-
-    <div class="architecture">
-<pre>
- Agent / CLI / App                        Signing Flow
- (Claude, dawn-cli, custom)
-        │                            1. Agent calls ows.sign()
-        │ OWS Interface             2. Policy engine evaluates
-        ▼                            3. Enclave decrypts key
- ┌─────────────────────┐             4. Transaction signed
- │    Access Layer      │             5. Key wiped from memory
- │  MCP │ REST │ SDK    │             6. Signature returned
- │      │      │        │             7. Submit via RPC (optional)
- │  ┌───┴──────┴──────┐ │
- │  │  Policy Engine   │ │            The agent NEVER sees
- │  │  (pre-signing)   │ │            the private key.
- │  └────────┬────────┘ │
- │  ┌────────▼────────┐ │            Chain plugins handle
- │  │ Signing Enclave  │ │            serialization, signing,
- │  │ (isolated proc)  │ │            broadcasting, and
- │  └────────┬────────┘ │            simulation per-chain.
- │  ┌────────▼────────┐ │
- │  │  Wallet Vault    │ │
- │  │ ~/.ows/wallets/  │ │
- │  └─────────────────┘ │
- └─────────────────────┘
-</pre>
-    </div>
 
     <!-- Flow Steps -->
     <div class="flow">
@@ -709,5 +680,6 @@ ows sign tx --wallet agent-treasury --chain evm --tx-hex <span class="string">"d
 
   <script src="js/main.js"></script>
   <script src="js/terminal-demo.js"></script>
+  <script src="js/problem-animation.js"></script>
 </body>
 </html>
