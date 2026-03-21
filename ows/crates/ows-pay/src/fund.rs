@@ -1,5 +1,5 @@
 use crate::chains::{self, ChainMapping, DEFAULT_CHAIN};
-use crate::error::PayError;
+use crate::error::{PayError, PayErrorCode};
 use crate::types::{
     FundResult, MoonPayBalanceRequest, MoonPayBalanceResponse, MoonPayDepositRequest,
     MoonPayDepositResponse, TokenBalance,
@@ -7,11 +7,7 @@ use crate::types::{
 
 const MOONPAY_API: &str = "https://agents.moonpay.com";
 
-/// Create a MoonPay deposit that auto-converts incoming crypto to USDC on the target chain.
-///
-/// Returns a deposit URL and multi-chain deposit addresses. Anyone can send crypto
-/// from Solana, Ethereum, Bitcoin, or Tron — it automatically converts to the
-/// specified token and settles to the OWS wallet.
+/// Create a MoonPay deposit that auto-converts incoming crypto to USDC.
 pub async fn fund(
     wallet_address: &str,
     chain: Option<&str>,
@@ -37,7 +33,10 @@ pub async fn fund(
     if !resp.status().is_success() {
         let status = resp.status();
         let body = resp.text().await.unwrap_or_default();
-        return Err(PayError::Http(format!("MoonPay returned {status}: {body}")));
+        return Err(PayError::new(
+            PayErrorCode::HttpStatus,
+            format!("MoonPay returned {status}: {body}"),
+        ));
     }
 
     let deposit: MoonPayDepositResponse = resp.json().await?;
@@ -55,7 +54,6 @@ pub async fn fund(
 }
 
 /// Check token balances for a wallet address via MoonPay.
-/// No authentication required.
 pub async fn get_balances(
     wallet_address: &str,
     chain: Option<&str>,
@@ -77,9 +75,10 @@ pub async fn get_balances(
     if !resp.status().is_success() {
         let status = resp.status();
         let body = resp.text().await.unwrap_or_default();
-        return Err(PayError::Http(format!(
-            "MoonPay balance check returned {status}: {body}"
-        )));
+        return Err(PayError::new(
+            PayErrorCode::HttpStatus,
+            format!("MoonPay balance returned {status}: {body}"),
+        ));
     }
 
     let balance_resp: MoonPayBalanceResponse = resp.json().await?;
@@ -88,8 +87,12 @@ pub async fn get_balances(
 
 fn resolve_chain(chain: Option<&str>) -> Result<&'static ChainMapping, PayError> {
     match chain {
-        Some(name) => chains::chain_by_name(name)
-            .ok_or_else(|| PayError::Unsupported(format!("unknown chain: {name}"))),
+        Some(name) => chains::chain_by_name(name).ok_or_else(|| {
+            PayError::new(
+                PayErrorCode::UnsupportedChain,
+                format!("unknown chain: {name}"),
+            )
+        }),
         None => Ok(DEFAULT_CHAIN),
     }
 }

@@ -1,6 +1,84 @@
 use crate::commands::read_passphrase;
 use crate::CliError;
 
+/// Concrete WalletAccess backed by ows-lib.
+struct OwsLibWallet {
+    wallet_name: String,
+    passphrase: String,
+}
+
+impl ows_pay::WalletAccess for OwsLibWallet {
+    fn evm_account(&self) -> Result<ows_pay::EvmAccount, ows_pay::PayError> {
+        let info = ows_lib::get_wallet(&self.wallet_name, None).map_err(|e| {
+            ows_pay::PayError::new(ows_pay::PayErrorCode::WalletNotFound, e.to_string())
+        })?;
+        let acct = info
+            .accounts
+            .iter()
+            .find(|a| a.chain_id.starts_with("eip155:"))
+            .ok_or_else(|| {
+                ows_pay::PayError::new(ows_pay::PayErrorCode::WalletNotFound, "no EVM account")
+            })?;
+        Ok(ows_pay::EvmAccount {
+            address: acct.address.clone(),
+        })
+    }
+
+    fn sign_typed_data(
+        &self,
+        chain: &str,
+        typed_data_json: &str,
+    ) -> Result<ows_pay::TypedDataSignature, ows_pay::PayError> {
+        let result = ows_lib::sign_typed_data(
+            &self.wallet_name,
+            chain,
+            typed_data_json,
+            Some(&self.passphrase),
+            None,
+            None,
+        )
+        .map_err(|e| ows_pay::PayError::new(ows_pay::PayErrorCode::SigningFailed, e.to_string()))?;
+        Ok(ows_pay::TypedDataSignature {
+            signature: format!("0x{}", result.signature),
+        })
+    }
+
+    fn sign_hash(&self, hash: &[u8]) -> Result<Vec<u8>, ows_pay::PayError> {
+        // Decrypt the EVM key, sign the hash, return 65-byte signature.
+        // The key is decrypted in-process and zeroized after signing.
+        let key = ows_lib::decrypt_signing_key(
+            &self.wallet_name,
+            ows_core::ChainType::Evm,
+            &self.passphrase,
+            None,
+            None,
+        )
+        .map_err(|e| ows_pay::PayError::new(ows_pay::PayErrorCode::SigningFailed, e.to_string()))?;
+
+        let signer = ows_signer::signer_for_chain(ows_core::ChainType::Evm);
+        let output = signer.sign(key.expose(), hash).map_err(|e| {
+            ows_pay::PayError::new(ows_pay::PayErrorCode::SigningFailed, e.to_string())
+        })?;
+
+        // EVM sign() returns 65 bytes: r(32) || s(32) || v(1).
+        // Normalize v to legacy format (27 or 28).
+        let mut sig = output.signature;
+        if sig.len() == 65 {
+            match sig[64] {
+                0 | 1 => sig[64] += 27, // raw recovery id → legacy v
+                27 | 28 => {}           // already legacy format
+                v => {
+                    return Err(ows_pay::PayError::new(
+                        ows_pay::PayErrorCode::SigningFailed,
+                        format!("invalid recovery id from signer: {v}"),
+                    ));
+                }
+            }
+        }
+        Ok(sig)
+    }
+}
+
 /// `ows pay request <url> --wallet <name> [--method GET] [--body '{}']`
 pub fn run(
     url: &str,
@@ -15,22 +93,25 @@ pub fn run(
         read_passphrase().to_string()
     };
 
+    let wallet = OwsLibWallet {
+        wallet_name: wallet_name.to_string(),
+        passphrase,
+    };
+
     let rt =
         tokio::runtime::Runtime::new().map_err(|e| CliError::InvalidArgs(format!("tokio: {e}")))?;
 
-    let result = rt.block_on(ows_pay::x402::pay(
-        wallet_name,
-        &passphrase,
-        url,
-        method,
-        body,
-    ))?;
+    let result = rt.block_on(ows_pay::pay(&wallet, url, method, body))?;
 
-    if !result.amount_display.is_empty() {
-        eprintln!(
-            "Paid {} on {} via x402",
-            result.amount_display, result.network
-        );
+    if let Some(ref payment) = result.payment {
+        if !payment.amount.is_empty() {
+            eprintln!(
+                "Paid {} on {} via {}",
+                payment.amount, payment.network, result.protocol
+            );
+        } else {
+            eprintln!("Paid via {}", result.protocol);
+        }
     }
 
     if result.status >= 400 {
@@ -46,118 +127,43 @@ pub fn discover(query: Option<&str>) -> Result<(), CliError> {
     let rt =
         tokio::runtime::Runtime::new().map_err(|e| CliError::InvalidArgs(format!("tokio: {e}")))?;
 
-    // Fetch both x402 and MPP in parallel.
-    let (x402_services, mpp_services) = rt.block_on(async {
-        let x402 = async {
-            match query {
-                Some(q) => ows_pay::discovery::search(q).await,
-                None => ows_pay::discovery::discover_x402(Some(100), None).await,
-            }
-        };
-        let mpp = async {
-            match query {
-                Some(q) => ows_pay::discovery::search_mpp(q).await,
-                None => ows_pay::discovery::discover_mpp().await,
-            }
-        };
-        tokio::join!(x402, mpp)
-    });
+    let services = rt.block_on(ows_pay::discover(query))?;
 
-    // --- MPP services ---
-    let mpp = mpp_services.unwrap_or_default();
+    if services.is_empty() {
+        eprintln!("No services found.");
+        return Ok(());
+    }
+
+    let (mpp, x402): (Vec<_>, Vec<_>) = services
+        .iter()
+        .partition(|s| s.protocol == ows_pay::Protocol::Mpp);
+
     if !mpp.is_empty() {
         eprintln!("MPP ({} services):\n", mpp.len());
         for svc in &mpp {
-            // Find cheapest paid endpoint for price display.
-            let price = cheapest_mpp_price(svc);
-
-            let cats = svc.categories.join(", ");
-            let desc = if svc.description.len() > 80 {
-                format!("{}...", &svc.description[..77])
-            } else {
-                svc.description.clone()
-            };
-
-            let paid_count = svc.endpoints.iter().filter(|e| e.payment.is_some()).count();
-            let total_count = svc.endpoints.len();
-
             println!(
-                "  {:<25} {:>8}  {paid_count:>2}/{total_count:<2} endpoints  [{cats}]",
-                svc.name, price
+                "  {:<25} {:>8}  [{}]",
+                svc.name,
+                svc.price,
+                svc.tags.join(", ")
             );
-            println!("  {:25} {desc}", "");
-            println!("  {:25} {}", "", svc.service_url);
+            println!("  {:25} {}", "", svc.description);
+            println!("  {:25} {}", "", svc.url);
             println!();
         }
     }
 
-    // --- x402 services (mainnet only) ---
-    let x402 = x402_services.unwrap_or_default();
-    const TESTNETS: &[&str] = &[
-        "base-sepolia",
-        "eip155:84532",
-        "eip155:11155111",
-        "solana-devnet",
-    ];
-    let filtered: Vec<_> = x402
-        .iter()
-        .filter(|svc| {
-            let net = svc
-                .accepts
-                .first()
-                .map(|a| a.network.as_str())
-                .unwrap_or("");
-            !TESTNETS.iter().any(|t| net.contains(t))
-        })
-        .collect();
-
-    if !filtered.is_empty() {
-        eprintln!("x402 ({} services):\n", filtered.len());
-        for svc in &filtered {
-            let accept = svc.accepts.first();
-
-            let price = accept
-                .map(|a| ows_pay::discovery::format_usdc(&a.amount))
-                .unwrap_or_else(|| "?".into());
-
-            let network = accept.map(|a| a.network.as_str()).unwrap_or("?");
-
-            let desc = accept
-                .and_then(|a| a.description.as_deref())
-                .or_else(|| svc.metadata.as_ref().and_then(|m| m.description.as_deref()))
-                .unwrap_or("");
-
-            let first_line = desc.lines().next().unwrap_or("");
-            let desc_display = if first_line.len() > 80 {
-                format!("{}...", &first_line[..77])
-            } else {
-                first_line.to_string()
-            };
-
-            println!("  {price:>8}  {network:<8}  {desc_display}");
-            println!("  {:>8}  {:8}  {}", "", "", svc.resource);
+    if !x402.is_empty() {
+        eprintln!("x402 ({} services):\n", x402.len());
+        for svc in &x402 {
+            println!(
+                "  {:>8}  {:<8}  {}",
+                svc.price, svc.network, svc.description
+            );
+            println!("  {:>8}  {:8}  {}", "", "", svc.url);
             println!();
         }
-    }
-
-    if mpp.is_empty() && filtered.is_empty() {
-        eprintln!("No services found.");
     }
 
     Ok(())
-}
-
-fn cheapest_mpp_price(svc: &ows_pay::types::MppService) -> String {
-    svc.endpoints
-        .iter()
-        .filter_map(|e| e.payment.as_ref())
-        .filter_map(|p| {
-            let amt_str = p.amount.as_deref()?;
-            let decimals = p.decimals.unwrap_or(6);
-            let amt: u128 = amt_str.parse().ok()?;
-            Some((amt, decimals))
-        })
-        .min_by_key(|(amt, _)| *amt)
-        .map(|(amt, dec)| ows_pay::discovery::format_mpp_amount(&amt.to_string(), dec))
-        .unwrap_or_else(|| "free".into())
 }

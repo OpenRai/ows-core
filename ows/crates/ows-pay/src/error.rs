@@ -1,37 +1,50 @@
 use thiserror::Error;
 
+/// Error codes for programmatic handling.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PayErrorCode {
+    /// HTTP transport error (DNS, TLS, timeout).
+    HttpTransport,
+    /// Server returned an unexpected HTTP status.
+    HttpStatus,
+    /// Protocol-level error (malformed 402, bad header encoding).
+    ProtocolMalformed,
+    /// Could not detect which payment protocol to use.
+    ProtocolUnknown,
+    /// Wallet not found or inaccessible.
+    WalletNotFound,
+    /// Key decryption or signing failed.
+    SigningFailed,
+    /// No supported chain/network in the payment requirements.
+    UnsupportedChain,
+    /// Discovery API error.
+    DiscoveryFailed,
+}
+
 #[derive(Debug, Error)]
-pub enum PayError {
-    #[error("http: {0}")]
-    Http(String),
+#[error("[{code:?}] {message}")]
+pub struct PayError {
+    pub code: PayErrorCode,
+    pub message: String,
+}
 
-    #[error("protocol: {0}")]
-    Protocol(String),
-
-    #[error("signing: {0}")]
-    Signing(String),
-
-    #[error("wallet: {0}")]
-    Wallet(String),
-
-    #[error("unsupported: {0}")]
-    Unsupported(String),
+impl PayError {
+    pub fn new(code: PayErrorCode, message: impl Into<String>) -> Self {
+        Self {
+            code,
+            message: message.into(),
+        }
+    }
 }
 
 impl From<reqwest::Error> for PayError {
     fn from(e: reqwest::Error) -> Self {
-        PayError::Http(e.to_string())
-    }
-}
-
-impl From<ows_lib::OwsLibError> for PayError {
-    fn from(e: ows_lib::OwsLibError) -> Self {
-        PayError::Wallet(e.to_string())
+        PayError::new(PayErrorCode::HttpTransport, e.to_string())
     }
 }
 
 impl From<serde_json::Error> for PayError {
     fn from(e: serde_json::Error) -> Self {
-        PayError::Protocol(format!("json: {e}"))
+        PayError::new(PayErrorCode::ProtocolMalformed, format!("json: {e}"))
     }
 }

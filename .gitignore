@@ -1,6 +1,7 @@
 # Rust
 **/target/
 .claude
+bugs/
 
 gtm
 
@@ -31,3 +32,5 @@ website/docs/md/
 
 # OS
 .DS_Store
+
+bugs/

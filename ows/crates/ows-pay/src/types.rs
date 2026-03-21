@@ -1,27 +1,84 @@
 use serde::{Deserialize, Serialize};
 
-// ---------------------------------------------------------------------------
-// x402 protocol types
-// ---------------------------------------------------------------------------
+// ===========================================================================
+// Unified public types
+// ===========================================================================
 
-/// Payment option from an x402-enabled server's 402 response.
+/// Which payment protocol was used.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Protocol {
+    X402,
+    Mpp,
+}
+
+impl std::fmt::Display for Protocol {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Protocol::X402 => write!(f, "x402"),
+            Protocol::Mpp => write!(f, "MPP"),
+        }
+    }
+}
+
+/// Details about a payment that was made.
+#[derive(Debug, Clone)]
+pub struct PaymentInfo {
+    /// Human-readable amount (e.g. "$0.01").
+    pub amount: String,
+    /// Network/chain name (e.g. "Base", "Tempo").
+    pub network: String,
+    /// Token symbol (e.g. "USDC").
+    pub token: String,
+}
+
+/// Result of a `pay()` call.
+#[derive(Debug, Clone)]
+pub struct PayResult {
+    /// Which protocol handled the payment.
+    pub protocol: Protocol,
+    /// HTTP status of the final response.
+    pub status: u16,
+    /// Response body.
+    pub body: String,
+    /// Payment details. `None` if no payment was required (non-402).
+    pub payment: Option<PaymentInfo>,
+}
+
+/// A discovered payable service, normalized across protocols.
+#[derive(Debug, Clone)]
+pub struct Service {
+    /// Protocol this service uses.
+    pub protocol: Protocol,
+    /// Human-readable name.
+    pub name: String,
+    /// Full endpoint URL.
+    pub url: String,
+    /// Short description.
+    pub description: String,
+    /// Cheapest price display (e.g. "$0.01", "free").
+    pub price: String,
+    /// Network or chain (e.g. "base", "Tempo").
+    pub network: String,
+    /// Categories / tags.
+    pub tags: Vec<String>,
+}
+
+// ===========================================================================
+// x402 wire types (internal, used by x402 module)
+// ===========================================================================
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PaymentRequirements {
     pub scheme: String,
-    /// CAIP-2 network identifier (e.g. "eip155:8453").
     pub network: String,
-    /// Required amount in token's smallest unit (e.g. "10000" = $0.01 USDC).
     #[serde(alias = "maxAmountRequired")]
     pub amount: String,
-    /// ERC-20 token contract address.
     pub asset: String,
-    /// Recipient address.
     #[serde(alias = "payTo")]
     pub pay_to: String,
     #[serde(default = "default_timeout")]
     pub max_timeout_seconds: u64,
-    /// Token metadata — must contain `name` and `version` for EIP-712 domain.
     #[serde(default)]
     pub extra: serde_json::Value,
     #[serde(default)]
@@ -34,7 +91,6 @@ fn default_timeout() -> u64 {
     30
 }
 
-/// The 402 response body from an x402 server.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct X402Response {
@@ -43,7 +99,6 @@ pub struct X402Response {
     pub accepts: Vec<PaymentRequirements>,
 }
 
-/// The signed payment payload sent back to the server.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PaymentPayload {
@@ -53,7 +108,6 @@ pub struct PaymentPayload {
     pub payload: Eip3009Payload,
 }
 
-/// EIP-3009 `transferWithAuthorization` payload.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Eip3009Payload {
     pub signature: String,
@@ -71,11 +125,10 @@ pub struct Eip3009Authorization {
     pub nonce: String,
 }
 
-// ---------------------------------------------------------------------------
-// x402 service discovery
-// ---------------------------------------------------------------------------
+// ===========================================================================
+// x402 discovery wire types
+// ===========================================================================
 
-/// A discovered x402 service from the Bazaar.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DiscoveredService {
@@ -99,7 +152,6 @@ pub struct ServiceMetadata {
     pub output: Option<serde_json::Value>,
 }
 
-/// Paginated response from the Bazaar discovery API.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DiscoveryResponse {
     pub items: Vec<DiscoveredService>,
@@ -114,18 +166,16 @@ pub struct Pagination {
     pub total: u64,
 }
 
-// ---------------------------------------------------------------------------
-// MPP service discovery types
-// ---------------------------------------------------------------------------
+// ===========================================================================
+// MPP discovery wire types
+// ===========================================================================
 
-/// Response from `GET https://mpp.dev/api/services`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MppServicesResponse {
     pub version: u32,
     pub services: Vec<MppService>,
 }
 
-/// A service from the MPP directory.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct MppService {
@@ -142,7 +192,6 @@ pub struct MppService {
     pub endpoints: Vec<MppEndpoint>,
 }
 
-/// A single endpoint within an MPP service.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MppEndpoint {
     pub method: String,
@@ -153,7 +202,6 @@ pub struct MppEndpoint {
     pub payment: Option<MppPayment>,
 }
 
-/// Payment info for an MPP endpoint.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MppPayment {
     #[serde(default)]
@@ -164,11 +212,10 @@ pub struct MppPayment {
     pub description: Option<String>,
 }
 
-// ---------------------------------------------------------------------------
-// MoonPay types
-// ---------------------------------------------------------------------------
+// ===========================================================================
+// MoonPay wire types
+// ===========================================================================
 
-/// Request body for MoonPay `deposit_create` tool.
 #[derive(Debug, Clone, Serialize)]
 pub struct MoonPayDepositRequest {
     pub name: String,
@@ -177,7 +224,6 @@ pub struct MoonPayDepositRequest {
     pub token: String,
 }
 
-/// Response from MoonPay `deposit_create` tool.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct MoonPayDepositResponse {
@@ -198,14 +244,12 @@ pub struct DepositWallet {
     pub qr_code: String,
 }
 
-/// Request body for MoonPay `token_balance_list` tool.
 #[derive(Debug, Clone, Serialize)]
 pub struct MoonPayBalanceRequest {
     pub wallet: String,
     pub chain: String,
 }
 
-/// Response from MoonPay `token_balance_list` tool.
 #[derive(Debug, Clone, Deserialize)]
 pub struct MoonPayBalanceResponse {
     pub items: Vec<TokenBalance>,
@@ -228,32 +272,11 @@ pub struct BalanceInfo {
     pub price: f64,
 }
 
-// ---------------------------------------------------------------------------
-// Result types
-// ---------------------------------------------------------------------------
-
-/// Result of a successful `ows pay` operation.
-#[derive(Debug, Clone)]
-pub struct PayResult {
-    /// HTTP status of the paid response.
-    pub status: u16,
-    /// Response body.
-    pub body: String,
-    /// How much was paid (human-readable, e.g. "$0.01").
-    pub amount_display: String,
-    /// Network the payment was made on.
-    pub network: String,
-}
-
 /// Result of `ows fund`.
 #[derive(Debug, Clone)]
 pub struct FundResult {
-    /// Deposit ID for tracking.
     pub deposit_id: String,
-    /// MoonPay deposit URL (shareable, opens in browser).
     pub deposit_url: String,
-    /// Multi-chain deposit addresses.
     pub wallets: Vec<(String, String)>,
-    /// Human-readable instructions.
     pub instructions: String,
 }
