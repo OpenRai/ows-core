@@ -7,6 +7,9 @@ description = "Payment client for the Open Wallet Standard (x402)"
 repository = "https://github.com/open-wallet-standard/core"
 
 [dependencies]
+# Core types (ChainType, parse_chain, etc.)
+ows-core = { path = "../ows-core" }
+
 # HTTP
 reqwest = { version = "0.12", features = ["json", "rustls-tls"], default-features = false }
 tokio = { version = "1", features = ["rt-multi-thread", "macros"] }

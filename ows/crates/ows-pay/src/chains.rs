@@ -1,81 +1,36 @@
-/// Chain mapping between OWS, MoonPay, and x402 identifiers.
+/// Thin helpers around `ows_core` for the payment layer.
 ///
-/// This is the single source of truth for chain compatibility across the three systems.
-/// A supported chain with identifiers across all systems.
-#[derive(Debug, Clone)]
-pub struct ChainMapping {
-    /// Human-readable name.
-    pub name: &'static str,
-    /// OWS chain string (e.g. "ethereum", "base").
-    pub ows_chain: &'static str,
-    /// CAIP-2 identifier used by x402 (e.g. "eip155:8453").
-    pub caip2: &'static str,
-    /// MoonPay chain name for balance/deposit queries (e.g. "base").
-    pub moonpay_chain: &'static str,
+/// All chain knowledge lives in `ows_core`. These are convenience
+/// wrappers for the specific lookups the payment flow needs.
+use ows_core::ChainType;
+
+/// Resolve a network string to a `ChainType`.
+///
+/// Handles CAIP-2 IDs (`"eip155:8453"`), known names (`"base"`),
+/// and unknown CAIP-2 IDs for known namespaces (`"eip155:999999"` → Evm).
+pub fn resolve_chain_type(network: &str) -> Option<ChainType> {
+    // Fast path: known chain name or CAIP-2 ID.
+    if let Ok(chain) = ows_core::parse_chain(network) {
+        return Some(chain.chain_type);
+    }
+    // Fallback: extract namespace from CAIP-2 for unregistered chains.
+    let ns = network.split(':').next()?;
+    ChainType::from_namespace(ns)
 }
 
-/// All chains where OWS + MoonPay + x402 overlap (the "golden path" chains).
-pub const SUPPORTED_CHAINS: &[ChainMapping] = &[
-    ChainMapping {
-        name: "Base",
-        ows_chain: "base",
-        caip2: "eip155:8453",
-        moonpay_chain: "base",
-    },
-    ChainMapping {
-        name: "Ethereum",
-        ows_chain: "ethereum",
-        caip2: "eip155:1",
-        moonpay_chain: "ethereum",
-    },
-    ChainMapping {
-        name: "Polygon",
-        ows_chain: "polygon",
-        caip2: "eip155:137",
-        moonpay_chain: "polygon",
-    },
-    ChainMapping {
-        name: "Arbitrum",
-        ows_chain: "arbitrum",
-        caip2: "eip155:42161",
-        moonpay_chain: "arbitrum",
-    },
-    ChainMapping {
-        name: "Optimism",
-        ows_chain: "optimism",
-        caip2: "eip155:10",
-        moonpay_chain: "optimism",
-    },
-];
-
-/// Testnet chains (for development / demos).
-pub const TESTNET_CHAINS: &[ChainMapping] = &[ChainMapping {
-    name: "Base Sepolia",
-    ows_chain: "base-sepolia",
-    caip2: "eip155:84532",
-    moonpay_chain: "base-sepolia",
-}];
-
-/// Default chain for payments (Base — lowest gas, broadest x402 support).
-pub const DEFAULT_CHAIN: &ChainMapping = &SUPPORTED_CHAINS[0]; // Base
-
-/// Look up a chain by its CAIP-2 network identifier (from an x402 402 response).
-pub fn chain_by_caip2(caip2: &str) -> Option<&'static ChainMapping> {
-    SUPPORTED_CHAINS
-        .iter()
-        .chain(TESTNET_CHAINS.iter())
-        .find(|c| c.caip2 == caip2)
+/// Human-readable name for a network. Falls back to the raw string.
+pub fn display_name(network: &str) -> &str {
+    if let Ok(chain) = ows_core::parse_chain(network) {
+        return chain.name;
+    }
+    network
 }
 
-/// Look up a chain by human-readable name (case-insensitive).
-pub fn chain_by_name(name: &str) -> Option<&'static ChainMapping> {
-    let lower = name.to_lowercase();
-    SUPPORTED_CHAINS
-        .iter()
-        .chain(TESTNET_CHAINS.iter())
-        .find(|c| {
-            c.name.to_lowercase() == lower || c.ows_chain == lower || c.moonpay_chain == lower
-        })
+/// Extract the reference part of a CAIP-2 identifier.
+///
+/// `"eip155:8453"` → `Some("8453")`
+pub fn caip2_reference(network: &str) -> Option<&str> {
+    network.split(':').nth(1)
 }
 
 #[cfg(test)]
@@ -83,65 +38,52 @@ mod tests {
     use super::*;
 
     #[test]
-    fn all_supported_chains_have_eip155_caip2() {
-        for chain in SUPPORTED_CHAINS {
-            assert!(
-                chain.caip2.starts_with("eip155:"),
-                "{} has non-EVM CAIP-2: {}",
-                chain.name,
-                chain.caip2
-            );
-        }
+    fn resolve_known_name() {
+        assert_eq!(resolve_chain_type("base"), Some(ChainType::Evm));
+        assert_eq!(resolve_chain_type("solana"), Some(ChainType::Solana));
+        assert_eq!(resolve_chain_type("bitcoin"), Some(ChainType::Bitcoin));
     }
 
     #[test]
-    fn default_chain_is_base() {
-        assert_eq!(DEFAULT_CHAIN.name, "Base");
+    fn resolve_known_caip2() {
+        assert_eq!(resolve_chain_type("eip155:8453"), Some(ChainType::Evm));
+        assert_eq!(
+            resolve_chain_type("solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp"),
+            Some(ChainType::Solana)
+        );
     }
 
     #[test]
-    fn lookup_by_caip2() {
-        let chain = chain_by_caip2("eip155:8453").unwrap();
-        assert_eq!(chain.name, "Base");
+    fn resolve_unknown_caip2_known_namespace() {
+        // Chain not in KNOWN_CHAINS but namespace is recognized.
+        assert_eq!(resolve_chain_type("eip155:999999"), Some(ChainType::Evm));
     }
 
     #[test]
-    fn lookup_by_caip2_not_found() {
-        assert!(chain_by_caip2("eip155:99999").is_none());
+    fn resolve_unknown_namespace() {
+        assert_eq!(resolve_chain_type("foochain:1"), None);
     }
 
     #[test]
-    fn lookup_by_caip2_includes_testnets() {
-        let chain = chain_by_caip2("eip155:84532").unwrap();
-        assert_eq!(chain.name, "Base Sepolia");
+    fn resolve_bare_unknown() {
+        assert_eq!(resolve_chain_type("foochain"), None);
     }
 
     #[test]
-    fn lookup_by_name_case_insensitive() {
-        assert!(chain_by_name("base").is_some());
-        assert!(chain_by_name("Base").is_some());
-        assert!(chain_by_name("BASE").is_some());
+    fn display_known() {
+        assert_eq!(display_name("base"), "base");
+        assert_eq!(display_name("eip155:8453"), "base");
     }
 
     #[test]
-    fn lookup_by_name_ows_chain() {
-        let chain = chain_by_name("ethereum").unwrap();
-        assert_eq!(chain.caip2, "eip155:1");
+    fn display_unknown_passthrough() {
+        assert_eq!(display_name("eip155:999999"), "eip155:999999");
     }
 
     #[test]
-    fn lookup_by_name_not_found() {
-        assert!(chain_by_name("solana").is_none());
-        assert!(chain_by_name("bitcoin").is_none());
-    }
-
-    #[test]
-    fn all_chains_have_consistent_fields() {
-        for chain in SUPPORTED_CHAINS.iter().chain(TESTNET_CHAINS.iter()) {
-            assert!(!chain.name.is_empty());
-            assert!(!chain.ows_chain.is_empty());
-            assert!(!chain.caip2.is_empty());
-            assert!(!chain.moonpay_chain.is_empty());
-        }
+    fn caip2_ref() {
+        assert_eq!(caip2_reference("eip155:8453"), Some("8453"));
+        assert_eq!(caip2_reference("solana:mainnet"), Some("mainnet"));
+        assert_eq!(caip2_reference("base"), None);
     }
 }

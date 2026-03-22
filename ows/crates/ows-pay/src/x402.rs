@@ -1,6 +1,6 @@
 use base64::{engine::general_purpose::STANDARD as B64, Engine};
 
-use crate::chains::{self, ChainMapping};
+use crate::chains;
 use crate::error::{PayError, PayErrorCode};
 use crate::types::{
     Eip3009Authorization, Eip3009Payload, PayResult, PaymentInfo, PaymentPayload,
@@ -21,9 +21,55 @@ pub(crate) async fn handle_x402(
     body_402: &str,
 ) -> Result<PayResult, PayError> {
     let requirements = parse_requirements(resp_headers, body_402)?;
-    let (req, chain) = pick_payment_option(&requirements)?;
+    let (req, network) = pick_payment_option(wallet, &requirements)?;
 
-    let account = wallet.evm_account()?;
+    let (payload, payment_info) = build_signed_payment(wallet, req, &network)?;
+
+    let payload_json = serde_json::to_string(&payload)?;
+    let payload_b64 = B64.encode(payload_json.as_bytes());
+
+    let client = reqwest::Client::new();
+    let retry = build_request(&client, url, method, req_body, Some(&payload_b64))?
+        .send()
+        .await?;
+
+    let status = retry.status().as_u16();
+    let response_body = retry.text().await.unwrap_or_default();
+
+    Ok(PayResult {
+        protocol: Protocol::X402,
+        status,
+        body: response_body,
+        payment: Some(payment_info),
+    })
+}
+
+// ---------------------------------------------------------------------------
+// Scheme dispatch
+// ---------------------------------------------------------------------------
+
+/// Build a signed payment payload, dispatching on the scheme.
+fn build_signed_payment(
+    wallet: &dyn WalletAccess,
+    req: &PaymentRequirements,
+    network: &str,
+) -> Result<(PaymentPayload, PaymentInfo), PayError> {
+    match req.scheme.as_str() {
+        "exact" => build_evm_exact(wallet, req, network),
+        scheme => Err(PayError::new(
+            PayErrorCode::ProtocolUnknown,
+            format!("unsupported payment scheme: {scheme}"),
+        )),
+    }
+}
+
+/// Build an EVM "exact" (EIP-3009 TransferWithAuthorization) payment.
+fn build_evm_exact(
+    wallet: &dyn WalletAccess,
+    req: &PaymentRequirements,
+    network: &str,
+) -> Result<(PaymentPayload, PaymentInfo), PayError> {
+    let account = wallet.account(network)?;
 
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -48,15 +94,12 @@ pub(crate) async fn handle_x402(
         .and_then(|v| v.as_str())
         .unwrap_or("2");
 
-    let chain_id_num: u64 = chain
-        .caip2
-        .split(':')
-        .nth(1)
+    let chain_id_num: u64 = chains::caip2_reference(network)
         .and_then(|s| s.parse().ok())
         .ok_or_else(|| {
             PayError::new(
                 PayErrorCode::ProtocolMalformed,
-                format!("bad CAIP-2: {}", chain.caip2),
+                format!("cannot extract numeric chain ID from: {network}"),
             )
         })?;
 
@@ -95,48 +138,40 @@ pub(crate) async fn handle_x402(
     })
     .to_string();
 
-    let sig = wallet.sign_typed_data(chain.ows_chain, &typed_data_json)?;
+    let signature = wallet.sign_payload(&req.scheme, network, &typed_data_json)?;
+
+    let eip3009 = Eip3009Payload {
+        signature,
+        authorization: Eip3009Authorization {
+            from: account.address,
+            to: req.pay_to.clone(),
+            value: req.amount.clone(),
+            valid_after: valid_after.to_string(),
+            valid_before: valid_before.to_string(),
+            nonce: nonce_hex,
+        },
+    };
 
     let payload = PaymentPayload {
         x402_version: 1,
         scheme: "exact".into(),
-        network: req.network.clone(),
-        payload: Eip3009Payload {
-            signature: sig.signature,
-            authorization: Eip3009Authorization {
-                from: account.address,
-                to: req.pay_to.clone(),
-                value: req.amount.clone(),
-                valid_after: valid_after.to_string(),
-                valid_before: valid_before.to_string(),
-                nonce: nonce_hex,
-            },
-        },
+        network: network.to_string(),
+        payload: serde_json::to_value(eip3009)?,
     };
 
-    let payload_json = serde_json::to_string(&payload)?;
-    let payload_b64 = B64.encode(payload_json.as_bytes());
     let amount_display = crate::discovery::format_usdc(&req.amount);
+    let payment_info = PaymentInfo {
+        amount: amount_display,
+        network: chains::display_name(network).to_string(),
+        token: "USDC".to_string(),
+    };
 
-    let client = reqwest::Client::new();
-    let retry = build_request(&client, url, method, req_body, Some(&payload_b64))?
-        .send()
-        .await?;
-
-    let status = retry.status().as_u16();
-    let response_body = retry.text().await.unwrap_or_default();
-
-    Ok(PayResult {
-        protocol: Protocol::X402,
-        status,
-        body: response_body,
-        payment: Some(PaymentInfo {
-            amount: amount_display,
-            network: chain.name.to_string(),
-            token: "USDC".to_string(),
-        }),
-    })
+    Ok((payload, payment_info))
 }
+
+// ---------------------------------------------------------------------------
+// Requirement parsing & chain selection
+// ---------------------------------------------------------------------------
 
 fn parse_requirements(
     headers: &reqwest::header::HeaderMap,
@@ -171,24 +206,47 @@ fn parse_requirements(
     Ok(parsed.accepts)
 }
 
-fn pick_payment_option(
-    requirements: &[PaymentRequirements],
-) -> Result<(&PaymentRequirements, &'static ChainMapping), PayError> {
+/// Payment schemes we know how to handle.
+const SUPPORTED_SCHEMES: &[&str] = &["exact"];
+
+/// Pick the first payment option whose scheme we support and whose
+/// network the wallet supports. Returns the requirement and its
+/// resolved CAIP-2 network string.
+fn pick_payment_option<'a>(
+    wallet: &dyn WalletAccess,
+    requirements: &'a [PaymentRequirements],
+) -> Result<(&'a PaymentRequirements, String), PayError> {
+    let supported = wallet.supported_chains();
+
     for req in requirements {
-        if req.scheme != "exact" {
+        if !SUPPORTED_SCHEMES.contains(&req.scheme.as_str()) {
             continue;
         }
-        if let Some(chain) =
-            chains::chain_by_caip2(&req.network).or_else(|| chains::chain_by_name(&req.network))
-        {
-            return Ok((req, chain));
+
+        let chain_type = match chains::resolve_chain_type(&req.network) {
+            Some(ct) => ct,
+            None => continue,
+        };
+
+        if !supported.contains(&chain_type) {
+            continue;
         }
+
+        // Resolve to CAIP-2 if the server sent a human name.
+        let network = match ows_core::parse_chain(&req.network) {
+            Ok(c) => c.chain_id.to_string(),
+            Err(_) => req.network.clone(), // Already CAIP-2 (unknown to registry but namespace matched).
+        };
+
+        return Ok((req, network));
     }
 
     let networks: Vec<_> = requirements.iter().map(|r| r.network.as_str()).collect();
     Err(PayError::new(
         PayErrorCode::UnsupportedChain,
-        format!("no supported EVM chain in 402 response (networks: {networks:?})"),
+        format!(
+            "no supported chain in 402 response (networks: {networks:?}, wallet supports: {supported:?})"
+        ),
     ))
 }
 
@@ -230,12 +288,13 @@ pub(crate) fn build_request(
 mod tests {
     use super::*;
     use base64::{engine::general_purpose::STANDARD as B64, Engine};
+    use ows_core::ChainType;
     use reqwest::header::HeaderMap;
 
     fn base_requirement() -> PaymentRequirements {
         PaymentRequirements {
             scheme: "exact".into(),
-            network: "base".into(),
+            network: "eip155:8453".into(),
             amount: "10000".into(),
             asset: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913".into(),
             pay_to: "0x1234567890abcdef1234567890abcdef12345678".into(),
@@ -243,6 +302,70 @@ mod tests {
             extra: serde_json::json!({"name": "USD Coin", "version": "2"}),
             description: Some("test service".into()),
             resource: None,
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Mock wallets
+    // -----------------------------------------------------------------------
+
+    struct EvmWallet;
+    impl WalletAccess for EvmWallet {
+        fn supported_chains(&self) -> Vec<ChainType> {
+            vec![ChainType::Evm]
+        }
+        fn account(&self, _network: &str) -> Result<crate::wallet::Account, PayError> {
+            Ok(crate::wallet::Account {
+                address: "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266".into(),
+            })
+        }
+        fn sign_payload(
+            &self,
+            _scheme: &str,
+            _network: &str,
+            _payload: &str,
+        ) -> Result<String, PayError> {
+            Ok("0xdeadbeef".into())
+        }
+    }
+
+    struct SolanaWallet;
+    impl WalletAccess for SolanaWallet {
+        fn supported_chains(&self) -> Vec<ChainType> {
+            vec![ChainType::Solana]
+        }
+        fn account(&self, _network: &str) -> Result<crate::wallet::Account, PayError> {
+            Ok(crate::wallet::Account {
+                address: "So11111111111111111111111111111111111111112".into(),
+            })
+        }
+        fn sign_payload(
+            &self,
+            _scheme: &str,
+            _network: &str,
+            _payload: &str,
+        ) -> Result<String, PayError> {
+            Ok("0xdeadbeef".into())
+        }
+    }
+
+    struct MultiWallet;
+    impl WalletAccess for MultiWallet {
+        fn supported_chains(&self) -> Vec<ChainType> {
+            vec![ChainType::Evm, ChainType::Solana]
+        }
+        fn account(&self, _network: &str) -> Result<crate::wallet::Account, PayError> {
+            Ok(crate::wallet::Account {
+                address: "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266".into(),
+            })
+        }
+        fn sign_payload(
+            &self,
+            _scheme: &str,
+            _network: &str,
+            _payload: &str,
+        ) -> Result<String, PayError> {
+            Ok("0xdeadbeef".into())
         }
     }
 
@@ -298,7 +421,7 @@ mod tests {
         let body = serde_json::json!({
             "accepts": [{
                 "scheme": "exact",
-                "network": "base",
+                "network": "eip155:8453",
                 "amount": "10000",
                 "asset": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
                 "payTo": "0xabc",
@@ -310,9 +433,7 @@ mod tests {
         let reqs = parse_requirements(&headers, &body).unwrap();
         assert_eq!(reqs.len(), 1);
         assert_eq!(reqs[0].scheme, "exact");
-        assert_eq!(reqs[0].network, "base");
-        assert_eq!(reqs[0].amount, "10000");
-        assert_eq!(reqs[0].pay_to, "0xabc");
+        assert_eq!(reqs[0].network, "eip155:8453");
     }
 
     #[test]
@@ -331,7 +452,6 @@ mod tests {
         let mut headers = HeaderMap::new();
         headers.insert("x-payment-required", encoded.parse().unwrap());
 
-        // Body is garbage — should still parse from header.
         let reqs = parse_requirements(&headers, "not json").unwrap();
         assert_eq!(reqs.len(), 1);
         assert_eq!(reqs[0].pay_to, "0xdef");
@@ -345,7 +465,7 @@ mod tests {
         let body = serde_json::json!({
             "accepts": [{
                 "scheme": "exact",
-                "network": "base",
+                "network": "eip155:8453",
                 "amount": "1000",
                 "asset": "0xaaa",
                 "payTo": "0xbbb"
@@ -377,92 +497,117 @@ mod tests {
     // -----------------------------------------------------------------------
 
     #[test]
-    fn pick_payment_option_base_by_name() {
+    fn pick_evm_by_caip2() {
         let reqs = vec![base_requirement()];
-        let (req, chain) = pick_payment_option(&reqs).unwrap();
-        assert_eq!(req.network, "base");
-        assert_eq!(chain.name, "Base");
-        assert_eq!(chain.caip2, "eip155:8453");
+        let (req, network) = pick_payment_option(&EvmWallet, &reqs).unwrap();
+        assert_eq!(req.network, "eip155:8453");
+        assert_eq!(network, "eip155:8453");
     }
 
     #[test]
-    fn pick_payment_option_by_caip2() {
+    fn pick_evm_by_name() {
         let mut req = base_requirement();
-        req.network = "eip155:8453".into();
-        let (_, chain) = pick_payment_option(&[req]).unwrap();
-        assert_eq!(chain.name, "Base");
+        req.network = "base".into();
+        let reqs = [req];
+        let (_, network) = pick_payment_option(&EvmWallet, &reqs).unwrap();
+        // Human name resolved to CAIP-2.
+        assert_eq!(network, "eip155:8453");
     }
 
     #[test]
-    fn pick_payment_option_skips_non_exact() {
+    fn pick_skips_unsupported_namespace() {
+        let mut req = base_requirement();
+        req.network = "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp".into();
+        let reqs = [req];
+        let err = pick_payment_option(&EvmWallet, &reqs).unwrap_err();
+        assert_eq!(err.code, PayErrorCode::UnsupportedChain);
+    }
+
+    #[test]
+    fn pick_solana_with_solana_wallet() {
+        let mut req = base_requirement();
+        req.network = "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp".into();
+        let reqs = [req];
+        let (_, network) = pick_payment_option(&SolanaWallet, &reqs).unwrap();
+        assert!(network.starts_with("solana:"));
+    }
+
+    #[test]
+    fn pick_multi_wallet_prefers_first() {
+        let evm_req = base_requirement();
+        let mut sol_req = base_requirement();
+        sol_req.network = "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp".into();
+        let reqs = [sol_req, evm_req];
+        let (_, network) = pick_payment_option(&MultiWallet, &reqs).unwrap();
+        assert!(network.starts_with("solana:"));
+    }
+
+    #[test]
+    fn pick_unknown_namespace_errors() {
+        let mut req = base_requirement();
+        req.network = "foochain:1".into();
+        let reqs = [req];
+        let err = pick_payment_option(&EvmWallet, &reqs).unwrap_err();
+        assert_eq!(err.code, PayErrorCode::UnsupportedChain);
+    }
+
+    #[test]
+    fn pick_unsupported_scheme_skipped() {
         let mut req = base_requirement();
         req.scheme = "subscription".into();
-        let err = pick_payment_option(&[req]).unwrap_err();
+        let reqs = [req];
+        let err = pick_payment_option(&EvmWallet, &reqs).unwrap_err();
         assert_eq!(err.code, PayErrorCode::UnsupportedChain);
     }
 
     #[test]
-    fn pick_payment_option_unsupported_chain() {
+    fn pick_unknown_evm_chain_still_works() {
+        // Chain not in KNOWN_CHAINS but namespace is recognized.
         let mut req = base_requirement();
-        req.network = "solana:mainnet".into();
-        let err = pick_payment_option(&[req]).unwrap_err();
-        assert_eq!(err.code, PayErrorCode::UnsupportedChain);
-    }
-
-    #[test]
-    fn pick_payment_option_prefers_first_match() {
-        let mut eth = base_requirement();
-        eth.network = "ethereum".into();
-        eth.amount = "99999".into();
-        let base = base_requirement(); // network = "base"
-        let reqs = [eth, base];
-        let (req, chain) = pick_payment_option(&reqs).unwrap();
-        assert_eq!(chain.name, "Ethereum");
-        assert_eq!(req.amount, "99999");
+        req.network = "eip155:999999".into();
+        let reqs = [req];
+        let (_, network) = pick_payment_option(&EvmWallet, &reqs).unwrap();
+        assert_eq!(network, "eip155:999999");
     }
 
     // -----------------------------------------------------------------------
-    // handle_x402 (mock wallet, no network)
+    // build_evm_exact
     // -----------------------------------------------------------------------
 
-    struct MockWallet;
-
-    impl WalletAccess for MockWallet {
-        fn evm_account(&self) -> Result<crate::wallet::EvmAccount, PayError> {
-            Ok(crate::wallet::EvmAccount {
-                address: "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266".into(),
-            })
-        }
-
-        fn sign_typed_data(
-            &self,
-            _chain: &str,
-            _typed_data_json: &str,
-        ) -> Result<crate::wallet::TypedDataSignature, PayError> {
-            Ok(crate::wallet::TypedDataSignature {
-                signature: "0xdeadbeef".into(),
-            })
-        }
-    }
-
-    /// Verify that handle_x402 builds correct typed data and payload structure
-    /// using a mock wallet (no real network call — will fail at the retry HTTP
-    /// request, but we can verify everything up to that point via parse/pick).
     #[test]
-    fn mock_wallet_compiles_and_satisfies_trait() {
-        // This test verifies the WalletAccess trait works with just
-        // evm_account + sign_typed_data (no sign_hash needed).
-        let wallet = MockWallet;
-        let account = wallet.evm_account().unwrap();
-        assert!(account.address.starts_with("0x"));
+    fn build_evm_exact_produces_valid_payload() {
+        let req = base_requirement();
+        let (payload, info) = build_evm_exact(&EvmWallet, &req, "eip155:8453").unwrap();
 
-        let sig = wallet.sign_typed_data("base", "{}").unwrap();
-        assert_eq!(sig.signature, "0xdeadbeef");
+        assert_eq!(payload.scheme, "exact");
+        assert_eq!(payload.network, "eip155:8453");
+        assert_eq!(payload.x402_version, 1);
+
+        let p = &payload.payload;
+        assert!(p.get("signature").is_some());
+        assert!(p.get("authorization").is_some());
+        let auth = p.get("authorization").unwrap();
+        assert_eq!(auth["from"], "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266");
+        assert_eq!(auth["to"], req.pay_to);
+        assert_eq!(auth["value"], req.amount);
+
+        assert_eq!(info.network, "base");
+        assert_eq!(info.token, "USDC");
     }
+
+    #[test]
+    fn build_evm_exact_fails_for_non_numeric_chain_id() {
+        let req = base_requirement();
+        let err = build_evm_exact(&EvmWallet, &req, "solana:mainnet").unwrap_err();
+        assert_eq!(err.code, PayErrorCode::ProtocolMalformed);
+    }
+
+    // -----------------------------------------------------------------------
+    // parse → pick roundtrip
+    // -----------------------------------------------------------------------
 
     #[test]
     fn parse_and_pick_roundtrip() {
-        // Simulate a real 402 body and verify the full parse → pick pipeline.
         let body = serde_json::json!({
             "x402Version": 1,
             "accepts": [{
@@ -479,8 +624,18 @@ mod tests {
 
         let headers = HeaderMap::new();
         let reqs = parse_requirements(&headers, &body).unwrap();
-        let (req, chain) = pick_payment_option(&reqs).unwrap();
+        let (req, network) = pick_payment_option(&EvmWallet, &reqs).unwrap();
         assert_eq!(req.pay_to, "0x7d9d1821d15B9e0b8Ab98A058361233E255E405D");
-        assert_eq!(chain.ows_chain, "base");
+        assert_eq!(network, "eip155:8453"); // "base" resolved to CAIP-2
+    }
+
+    #[test]
+    fn mock_wallet_satisfies_trait() {
+        let wallet = EvmWallet;
+        assert_eq!(wallet.supported_chains(), vec![ChainType::Evm]);
+        let account = wallet.account("eip155:8453").unwrap();
+        assert!(account.address.starts_with("0x"));
+        let sig = wallet.sign_payload("exact", "eip155:8453", "{}").unwrap();
+        assert_eq!(sig, "0xdeadbeef");
     }
 }

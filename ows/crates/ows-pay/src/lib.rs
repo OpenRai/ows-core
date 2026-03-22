@@ -1,6 +1,8 @@
 //! `ows-pay` — payment client for the Open Wallet Standard.
 //!
-//! Supports x402 with automatic 402 detection and payment handling.
+//! Chain-agnostic: works with any chain the wallet supports. Payment
+//! scheme dispatch (e.g. EVM "exact" / EIP-3009) is handled internally
+//! based on the x402 `scheme` field.
 //!
 //! ```ignore
 //! let result = ows_pay::pay(&wallet, "https://api.example.com/data", "GET", None).await?;
@@ -19,7 +21,7 @@ mod x402;
 
 pub use error::{PayError, PayErrorCode};
 pub use types::{DiscoverResult, PayResult, PaymentInfo, Protocol, Service};
-pub use wallet::{EvmAccount, TypedDataSignature, WalletAccess};
+pub use wallet::{Account, WalletAccess};
 
 /// Make an HTTP request with automatic payment handling.
 ///

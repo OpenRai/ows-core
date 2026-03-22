@@ -1,5 +1,6 @@
 use crate::commands::read_passphrase;
 use crate::CliError;
+use ows_core::ChainType;
 
 /// Concrete WalletAccess backed by ows-lib.
 struct OwsLibWallet {
@@ -8,39 +9,75 @@ struct OwsLibWallet {
 }
 
 impl ows_pay::WalletAccess for OwsLibWallet {
-    fn evm_account(&self) -> Result<ows_pay::EvmAccount, ows_pay::PayError> {
+    fn supported_chains(&self) -> Vec<ChainType> {
+        if let Ok(info) = ows_lib::get_wallet(&self.wallet_name, None) {
+            let mut chains = Vec::new();
+            for acct in &info.accounts {
+                let ns = acct.chain_id.split(':').next().unwrap_or("");
+                if let Some(ct) = ChainType::from_namespace(ns) {
+                    if !chains.contains(&ct) {
+                        chains.push(ct);
+                    }
+                }
+            }
+            if chains.is_empty() {
+                vec![ChainType::Evm]
+            } else {
+                chains
+            }
+        } else {
+            vec![ChainType::Evm]
+        }
+    }
+
+    fn account(&self, network: &str) -> Result<ows_pay::Account, ows_pay::PayError> {
         let info = ows_lib::get_wallet(&self.wallet_name, None).map_err(|e| {
             ows_pay::PayError::new(ows_pay::PayErrorCode::WalletNotFound, e.to_string())
         })?;
+        let ns = network.split(':').next().unwrap_or("eip155");
         let acct = info
             .accounts
             .iter()
-            .find(|a| a.chain_id.starts_with("eip155:"))
+            .find(|a| a.chain_id.starts_with(&format!("{ns}:")))
             .ok_or_else(|| {
-                ows_pay::PayError::new(ows_pay::PayErrorCode::WalletNotFound, "no EVM account")
+                ows_pay::PayError::new(
+                    ows_pay::PayErrorCode::WalletNotFound,
+                    format!("no {ns} account in wallet"),
+                )
             })?;
-        Ok(ows_pay::EvmAccount {
+        Ok(ows_pay::Account {
             address: acct.address.clone(),
         })
     }
 
-    fn sign_typed_data(
+    fn sign_payload(
         &self,
-        chain: &str,
-        typed_data_json: &str,
-    ) -> Result<ows_pay::TypedDataSignature, ows_pay::PayError> {
-        let result = ows_lib::sign_typed_data(
-            &self.wallet_name,
-            chain,
-            typed_data_json,
-            Some(&self.passphrase),
-            None,
-            None,
-        )
-        .map_err(|e| ows_pay::PayError::new(ows_pay::PayErrorCode::SigningFailed, e.to_string()))?;
-        Ok(ows_pay::TypedDataSignature {
-            signature: format!("0x{}", result.signature),
-        })
+        scheme: &str,
+        network: &str,
+        payload: &str,
+    ) -> Result<String, ows_pay::PayError> {
+        match scheme {
+            "exact" => {
+                // EIP-712 typed data signing.
+                // ows_lib::sign_typed_data accepts both names ("base") and CAIP-2 IDs.
+                let result = ows_lib::sign_typed_data(
+                    &self.wallet_name,
+                    network,
+                    payload,
+                    Some(&self.passphrase),
+                    None,
+                    None,
+                )
+                .map_err(|e| {
+                    ows_pay::PayError::new(ows_pay::PayErrorCode::SigningFailed, e.to_string())
+                })?;
+                Ok(format!("0x{}", result.signature))
+            }
+            other => Err(ows_pay::PayError::new(
+                ows_pay::PayErrorCode::ProtocolUnknown,
+                format!("unsupported payment scheme: {other}"),
+            )),
+        }
     }
 }
 

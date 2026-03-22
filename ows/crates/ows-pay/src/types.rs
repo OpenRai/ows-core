@@ -116,7 +116,8 @@ pub struct PaymentPayload {
     pub x402_version: u32,
     pub scheme: String,
     pub network: String,
-    pub payload: Eip3009Payload,
+    /// Scheme-specific payload. For "exact" (EVM): contains `Eip3009Payload`.
+    pub payload: serde_json::Value,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

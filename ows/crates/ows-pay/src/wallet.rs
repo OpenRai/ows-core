@@ -1,33 +1,32 @@
 use crate::error::PayError;
+use ows_core::ChainType;
 
-/// Information about a wallet's EVM account.
+/// An account on any chain.
 #[derive(Debug, Clone)]
-pub struct EvmAccount {
-    /// Checksummed EVM address (0x...).
+pub struct Account {
+    /// Address in the chain's native format (e.g. "0x..." for EVM, base58 for Solana).
     pub address: String,
-}
-
-/// Result of signing EIP-712 typed data.
-#[derive(Debug, Clone)]
-pub struct TypedDataSignature {
-    /// Hex-encoded signature with 0x prefix.
-    pub signature: String,
 }
 
 /// Trait abstracting wallet access for payment operations.
 ///
-/// Implement this to provide wallet functionality without coupling to ows-lib.
+/// Each method takes a CAIP-2 network identifier (e.g. `"eip155:8453"`,
+/// `"solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp"`) to identify the chain.
+///
 /// The private key NEVER leaves the implementation — all signing happens
 /// inside the wallet.
 pub trait WalletAccess: Send + Sync {
-    /// Get the EVM account info for this wallet.
-    fn evm_account(&self) -> Result<EvmAccount, PayError>;
+    /// Chain families this wallet can operate on.
+    fn supported_chains(&self) -> Vec<ChainType>;
 
-    /// Sign EIP-712 typed data. Returns the hex signature with 0x prefix.
-    /// Used by x402 (TransferWithAuthorization).
-    fn sign_typed_data(
-        &self,
-        chain: &str,
-        typed_data_json: &str,
-    ) -> Result<TypedDataSignature, PayError>;
+    /// Get the account for a CAIP-2 network.
+    fn account(&self, network: &str) -> Result<Account, PayError>;
+
+    /// Sign a payment payload for the given scheme and network.
+    ///
+    /// The payload format depends on the scheme:
+    /// - `"exact"`: EIP-712 typed data JSON (EVM chains)
+    ///
+    /// Returns the signature as a hex string with `0x` prefix.
+    fn sign_payload(&self, scheme: &str, network: &str, payload: &str) -> Result<String, PayError>;
 }

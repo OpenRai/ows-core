@@ -1,4 +1,3 @@
-use crate::chains::{self, ChainMapping, DEFAULT_CHAIN};
 use crate::error::{PayError, PayErrorCode};
 use crate::types::{
     FundResult, MoonPayBalanceRequest, MoonPayBalanceResponse, MoonPayDepositRequest,
@@ -7,20 +6,96 @@ use crate::types::{
 
 const MOONPAY_API: &str = "https://agents.moonpay.com";
 
+/// MoonPay-specific chain mapping. This is separate from the protocol-level
+/// CAIP-2 utilities because MoonPay has its own chain name scheme.
+struct MoonPayChain {
+    display_name: &'static str,
+    moonpay_name: &'static str,
+}
+
+const MOONPAY_CHAINS: &[(&str, MoonPayChain)] = &[
+    (
+        "base",
+        MoonPayChain {
+            display_name: "Base",
+            moonpay_name: "base",
+        },
+    ),
+    (
+        "ethereum",
+        MoonPayChain {
+            display_name: "Ethereum",
+            moonpay_name: "ethereum",
+        },
+    ),
+    (
+        "polygon",
+        MoonPayChain {
+            display_name: "Polygon",
+            moonpay_name: "polygon",
+        },
+    ),
+    (
+        "arbitrum",
+        MoonPayChain {
+            display_name: "Arbitrum",
+            moonpay_name: "arbitrum",
+        },
+    ),
+    (
+        "optimism",
+        MoonPayChain {
+            display_name: "Optimism",
+            moonpay_name: "optimism",
+        },
+    ),
+    (
+        "base-sepolia",
+        MoonPayChain {
+            display_name: "Base Sepolia",
+            moonpay_name: "base-sepolia",
+        },
+    ),
+];
+
+const DEFAULT_MOONPAY_CHAIN: &MoonPayChain = &MoonPayChain {
+    display_name: "Base",
+    moonpay_name: "base",
+};
+
+fn resolve_moonpay_chain(chain: Option<&str>) -> Result<&'static MoonPayChain, PayError> {
+    match chain {
+        Some(name) => {
+            let lower = name.to_lowercase();
+            MOONPAY_CHAINS
+                .iter()
+                .find(|(k, _)| *k == lower)
+                .map(|(_, v)| v)
+                .ok_or_else(|| {
+                    PayError::new(
+                        PayErrorCode::UnsupportedChain,
+                        format!("unknown chain for funding: {name}"),
+                    )
+                })
+        }
+        None => Ok(DEFAULT_MOONPAY_CHAIN),
+    }
+}
+
 /// Create a MoonPay deposit that auto-converts incoming crypto to USDC.
 pub async fn fund(
     wallet_address: &str,
     chain: Option<&str>,
     token: Option<&str>,
 ) -> Result<FundResult, PayError> {
-    let mapping = resolve_chain(chain)?;
+    let mapping = resolve_moonpay_chain(chain)?;
     let token = token.unwrap_or("USDC");
 
     let client = reqwest::Client::new();
     let req = MoonPayDepositRequest {
-        name: format!("OWS deposit ({token} on {})", mapping.name),
+        name: format!("OWS deposit ({token} on {})", mapping.display_name),
         wallet: wallet_address.to_string(),
-        chain: mapping.moonpay_chain.to_string(),
+        chain: mapping.moonpay_name.to_string(),
         token: token.to_string(),
     };
 
@@ -58,12 +133,12 @@ pub async fn get_balances(
     wallet_address: &str,
     chain: Option<&str>,
 ) -> Result<Vec<TokenBalance>, PayError> {
-    let mapping = resolve_chain(chain)?;
+    let mapping = resolve_moonpay_chain(chain)?;
     let client = reqwest::Client::new();
 
     let req = MoonPayBalanceRequest {
         wallet: wallet_address.to_string(),
-        chain: mapping.moonpay_chain.to_string(),
+        chain: mapping.moonpay_name.to_string(),
     };
 
     let resp = client
@@ -83,16 +158,4 @@ pub async fn get_balances(
 
     let balance_resp: MoonPayBalanceResponse = resp.json().await?;
     Ok(balance_resp.items)
-}
-
-fn resolve_chain(chain: Option<&str>) -> Result<&'static ChainMapping, PayError> {
-    match chain {
-        Some(name) => chains::chain_by_name(name).ok_or_else(|| {
-            PayError::new(
-                PayErrorCode::UnsupportedChain,
-                format!("unknown chain: {name}"),
-            )
-        }),
-        None => Ok(DEFAULT_CHAIN),
-    }
 }
