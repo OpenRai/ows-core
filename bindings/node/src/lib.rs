@@ -67,11 +67,7 @@ pub fn generate_mnemonic(words: Option<u32>) -> Result<String> {
 
 /// Derive an address from a mnemonic for the given chain.
 #[napi]
-pub fn derive_address(
-    mnemonic: String,
-    chain: String,
-    index: Option<u32>,
-) -> Result<String> {
+pub fn derive_address(mnemonic: String, chain: String, index: Option<u32>) -> Result<String> {
     ows_lib::derive_address(&mnemonic, &chain, index).map_err(map_err)
 }
 
@@ -293,8 +289,6 @@ pub fn sign_and_send(
         rpc_url.as_deref(),
         vault_path(vault_path_opt).as_deref(),
     )
-    .map(|r| SendResult {
-        tx_hash: r.tx_hash,
-    })
+    .map(|r| SendResult { tx_hash: r.tx_hash })
     .map_err(map_err)
 }
