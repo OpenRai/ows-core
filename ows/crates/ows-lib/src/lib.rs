@@ -1,6 +1,7 @@
 pub mod error;
 pub mod migrate;
 pub mod ops;
+mod sui_grpc;
 pub mod types;
 pub mod vault;
 

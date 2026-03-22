@@ -730,7 +730,6 @@ fn broadcast_ton(rpc_url: &str, signed_bytes: &[u8]) -> Result<String, OwsLibErr
 }
 
 fn broadcast_sui(rpc_url: &str, signed_bytes: &[u8]) -> Result<String, OwsLibError> {
-    use base64::Engine;
     use ows_signer::chains::sui::WIRE_SIG_LEN;
 
     if signed_bytes.len() <= WIRE_SIG_LEN {
@@ -743,26 +742,7 @@ fn broadcast_sui(rpc_url: &str, signed_bytes: &[u8]) -> Result<String, OwsLibErr
     let tx_part = &signed_bytes[..split];
     let sig_part = &signed_bytes[split..];
 
-    let b64_tx = base64::engine::general_purpose::STANDARD.encode(tx_part);
-    let b64_sig = base64::engine::general_purpose::STANDARD.encode(sig_part);
-
-    let body = serde_json::json!({
-        "jsonrpc": "2.0",
-        "method": "sui_executeTransactionBlock",
-        "params": [b64_tx, [b64_sig], null, null],
-        "id": 1
-    });
-    let resp = curl_post_json(rpc_url, &body.to_string())?;
-    let parsed: serde_json::Value = serde_json::from_str(&resp)?;
-
-    if let Some(error) = parsed.get("error") {
-        return Err(OwsLibError::BroadcastFailed(format!("RPC error: {error}")));
-    }
-
-    parsed["result"]["digest"]
-        .as_str()
-        .map(|s| s.to_string())
-        .ok_or_else(|| OwsLibError::BroadcastFailed(format!("no digest in response: {resp}")))
+    crate::sui_grpc::execute_transaction(rpc_url, tx_part, sig_part)
 }
 
 fn curl_post_json(url: &str, body: &str) -> Result<String, OwsLibError> {
