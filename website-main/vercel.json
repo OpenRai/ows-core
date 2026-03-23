@@ -1,0 +1,16 @@
+{
+  "framework": null,
+  "buildCommand": "cp ../ows/install.sh install.sh",
+  "outputDirectory": ".",
+  "headers": [
+    {
+      "source": "/install.sh",
+      "headers": [
+        {
+          "key": "Content-Type",
+          "value": "text/x-shellscript; charset=utf-8"
+        }
+      ]
+    }
+  ]
+}

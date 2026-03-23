@@ -1,0 +1,5 @@
+{
+  "framework": null,
+  "buildCommand": "mkdir -p md && cp ../docs/*.md md/",
+  "outputDirectory": "."
+}
