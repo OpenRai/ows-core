@@ -1,6 +1,6 @@
 [package]
 name = "ows-python"
-version = "0.5.8"
+version = "1.0.0"
 edition = "2021"
 description = "Python native bindings for the Open Wallet Standard"
 
