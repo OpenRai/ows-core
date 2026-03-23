@@ -4,6 +4,7 @@ use crate::CliError;
 ///
 /// Creates a MoonPay deposit that generates multi-chain deposit addresses.
 /// Anyone can send crypto from any chain — it auto-converts to the target token.
+/// Use `bsc` as the canonical BNB Chain name; `bnb` is accepted as a MoonPay alias.
 pub fn run(wallet_name: &str, chain: Option<&str>, token: Option<&str>) -> Result<(), CliError> {
     let wallet = ows_lib::get_wallet(wallet_name, None)?;
     let evm_account = wallet
@@ -67,6 +68,7 @@ pub fn run(wallet_name: &str, chain: Option<&str>, token: Option<&str>) -> Resul
 /// `ows fund balance --wallet <name> [--chain base]`
 ///
 /// Check token balances via MoonPay.
+/// Use `bsc` as the canonical BNB Chain name; `bnb` is accepted as a MoonPay alias.
 pub fn balance(wallet_name: &str, chain: Option<&str>) -> Result<(), CliError> {
     let wallet = ows_lib::get_wallet(wallet_name, None)?;
     let evm_account = wallet

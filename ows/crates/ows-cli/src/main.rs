@@ -227,7 +227,7 @@ enum FundCommands {
         /// Wallet name or ID
         #[arg(long, env = "OWS_WALLET")]
         wallet: String,
-        /// Target chain (default: base)
+        /// Target chain (default: base). Use `bsc` as the canonical BNB Chain name; `bnb` is also accepted.
         #[arg(long, default_value = "base")]
         chain: String,
         /// Token to receive (default: USDC)
@@ -239,7 +239,7 @@ enum FundCommands {
         /// Wallet name or ID
         #[arg(long, env = "OWS_WALLET")]
         wallet: String,
-        /// Chain to check (default: base)
+        /// Chain to check (default: base). Use `bsc` as the canonical BNB Chain name; `bnb` is also accepted.
         #[arg(long, default_value = "base")]
         chain: String,
     },
