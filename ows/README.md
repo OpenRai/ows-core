@@ -33,6 +33,13 @@ cargo build --workspace --release
 | `ows fund balance` | Check token balances for a wallet |
 | `ows mnemonic generate` | Generate a BIP-39 mnemonic phrase |
 | `ows mnemonic derive` | Derive an address from a mnemonic |
+| `ows policy create` | Register a policy from a JSON file |
+| `ows policy list` | List all registered policies |
+| `ows policy show` | Show details of a policy |
+| `ows policy delete` | Delete a policy |
+| `ows key create` | Create an API key for agent access |
+| `ows key list` | List all API keys |
+| `ows key revoke` | Revoke (delete) an API key |
 | `ows update` | Update ows and bindings |
 | `ows uninstall` | Remove ows from the system |
 
@@ -53,6 +60,54 @@ console.log(wallet.accounts); // addresses for EVM, Solana, Sui, Bitcoin, Cosmos
 
 const sig = signMessage("my-wallet", "evm", "hello");
 console.log(sig.signature);
+```
+
+## Agent Access (Policy Engine)
+
+Give AI agents scoped, policy-gated access to wallets. The credential determines the access tier — passphrase for owners (full access, no policies), API token for agents (policy-enforced).
+
+```bash
+# 1. Create a policy: Base chain only, valid until a fixed time
+cat > base-policy.json << 'EOF'
+{
+  "id": "base-only",
+  "name": "Base only until April",
+  "version": 1,
+  "created_at": "2026-03-22T00:00:00Z",
+  "rules": [
+    { "type": "allowed_chains", "chain_ids": ["eip155:8453"] },
+    { "type": "expires_at", "timestamp": "2026-04-01T00:00:00Z" }
+  ],
+  "action": "deny"
+}
+EOF
+ows policy create --file base-policy.json
+
+# 2. Create an API key scoped to one wallet with that policy
+ows key create --name "claude-agent" --wallet my-wallet --policy base-only
+# → ows_key_a1b2c3d4...  (save this token)
+
+# 3. Agent signs on Base — allowed
+OWS_PASSPHRASE="ows_key_a1b2c3d4..." ows sign tx \
+  --wallet my-wallet --chain base --tx 0x02f8...
+# → signature returned
+
+# 4. Agent tries Ethereum mainnet — denied
+OWS_PASSPHRASE="ows_key_a1b2c3d4..." ows sign tx \
+  --wallet my-wallet --chain ethereum --tx 0x02f8...
+# → error: policy denied: chain eip155:1 not in allowlist
+
+# 5. Revoke access instantly
+ows key revoke --id <key-id> --confirm
+```
+
+Works identically from Node.js and Python — pass the token as `passphrase`:
+
+```javascript
+import { signTransaction, createApiKey, createPolicy } from "@open-wallet-standard/core";
+
+// Agent signs with token — policies enforced automatically
+const sig = signTransaction("my-wallet", "base", "0x02f8...", "ows_key_a1b2c3d4...");
 ```
 
 ## Crates
