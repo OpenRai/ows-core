@@ -1,27 +1,33 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-cd "$(git rev-parse --show-toplevel)"
-
-# Remember which files are currently staged
-STAGED_FILES=$(git diff --cached --name-only --diff-filter=ACM)
-
 cd "$(git rev-parse --show-toplevel)/ows"
 
-echo "Running cargo fmt..."
-cargo fmt --all
+echo "Checking cargo fmt..."
+if ! cargo fmt --all -- --check 2>&1; then
+  echo ""
+  echo "ERROR: cargo fmt found formatting issues."
+  echo "Run 'cargo fmt --all' in ows/ to fix, then re-stage and commit."
+  exit 1
+fi
 
-echo "Running cargo clippy..."
-cargo clippy --workspace --fix --allow-dirty --allow-staged -- -D warnings
+echo "Checking cargo clippy..."
+if ! cargo clippy --workspace -- -D warnings 2>&1; then
+  echo ""
+  echo "ERROR: cargo clippy found warnings."
+  echo "Fix the issues above, then re-stage and commit."
+  exit 1
+fi
 
-# Re-stage only files that were originally staged (they may have been modified by fmt/clippy)
-cd "$(git rev-parse --show-toplevel)"
-echo "$STAGED_FILES" | while IFS= read -r f; do
-  [ -n "$f" ] && git add "$f"
+echo "Verifying Cargo.lock files are up to date..."
+ROOT="$(git rev-parse --show-toplevel)"
+for dir in ows bindings/node bindings/python; do
+  if ! cargo metadata --locked --format-version 1 --manifest-path "$ROOT/$dir/Cargo.toml" > /dev/null 2>&1; then
+    echo ""
+    echo "ERROR: $dir/Cargo.lock is out of date."
+    echo "Run 'cargo check' in $dir/ to update it, then re-stage and commit."
+    exit 1
+  fi
 done
-
-echo "Running cargo build..."
-cd "$(git rev-parse --show-toplevel)/ows"
-cargo build --workspace
 
 echo "Pre-commit checks passed."

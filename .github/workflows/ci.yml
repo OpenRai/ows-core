@@ -24,7 +24,7 @@ jobs:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
       - name: Install Rust toolchain
-        run: rustup update stable
+        run: rustup show active-toolchain || rustup install
 
       - name: Cache cargo registry and build
         uses: actions/cache@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
@@ -35,6 +35,9 @@ jobs:
             ows/target
           key: ${{ runner.os }}-cargo-${{ hashFiles('ows/Cargo.lock') }}
           restore-keys: ${{ runner.os }}-cargo-
+
+      - name: Verify Cargo.lock is up to date
+        run: cargo metadata --locked --format-version 1 > /dev/null
 
       - name: Check formatting
         run: cargo fmt --all -- --check
@@ -59,7 +62,7 @@ jobs:
           node-version: "22"
 
       - name: Install Rust toolchain
-        run: rustup update stable
+        run: rustup show active-toolchain || rustup install
 
       - name: Cache cargo registry and build
         uses: actions/cache@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
@@ -71,6 +74,9 @@ jobs:
           key: ${{ runner.os }}-node-cargo-${{ hashFiles('bindings/node/Cargo.lock') }}
           restore-keys: ${{ runner.os }}-node-cargo-
 
+      - name: Verify Cargo.lock is up to date
+        run: cargo metadata --locked --format-version 1 > /dev/null
+
       - name: Install dependencies
         run: npm install
 
@@ -79,3 +85,28 @@ jobs:
 
       - name: Run tests
         run: npm test
+
+  python:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: bindings/python
+
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Install Rust toolchain
+        run: rustup show active-toolchain || rustup install
+
+      - name: Cache cargo registry and build
+        uses: actions/cache@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            bindings/python/target
+          key: ${{ runner.os }}-python-cargo-${{ hashFiles('bindings/python/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-python-cargo-
+
+      - name: Verify Cargo.lock is up to date
+        run: cargo metadata --locked --format-version 1 > /dev/null
