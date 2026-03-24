@@ -64,6 +64,7 @@ impl Config {
             "sui:mainnet".into(),
             "https://fullnode.mainnet.sui.io:443".into(),
         );
+        rpc.insert("nano:mainnet".into(), "https://nanoslo.0x.no/proxy".into());
         rpc
     }
 }
