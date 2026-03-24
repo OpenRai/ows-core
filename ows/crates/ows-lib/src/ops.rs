@@ -593,6 +593,280 @@ pub fn sign_encode_and_broadcast(
     Ok(SendResult { tx_hash })
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Nano wallet actions (send, balance, receive)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Nano Foundation representative — used when opening new accounts.
+const NANO_DEFAULT_REPRESENTATIVE: &str =
+    "nano_3arg3asgtigae3xckabaaewkx3bzsh7nwz7jkmjos79ihyaxwphhm6qgjps4";
+
+/// Result of a Nano send operation.
+pub struct NanoSendResult {
+    pub block_hash: String,
+    pub amount_raw: String,
+}
+
+/// Result of a Nano balance query.
+pub struct NanoBalanceResult {
+    pub address: String,
+    pub balance_raw: String,
+    pub balance_xno: String,
+    /// `None` if the account is unopened.
+    pub frontier: Option<String>,
+    pub pending_count: usize,
+}
+
+/// A single received block.
+pub struct NanoReceiveBlockResult {
+    pub block_hash: String,
+    pub amount_raw: String,
+    pub source: String,
+}
+
+/// Result of a Nano receive operation.
+pub struct NanoReceiveResult {
+    pub received: Vec<NanoReceiveBlockResult>,
+    pub new_balance_raw: String,
+    pub new_balance_xno: String,
+}
+
+/// Send XNO from a wallet.
+///
+/// Builds a state block (send), signs, generates PoW, and broadcasts.
+pub fn nano_send(
+    private_key: &[u8],
+    to_address: &str,
+    amount_raw: u128,
+    rpc_url: &str,
+) -> Result<NanoSendResult, OwsLibError> {
+    use ows_signer::chains::nano::{build_state_block, nano_pubkey_from_address};
+
+    let signer = signer_for_chain(ChainType::Nano);
+
+    // Derive sender address
+    let from_address = signer.derive_address(private_key)?;
+
+    // Validate destination
+    let dest_pubkey = nano_pubkey_from_address(to_address)
+        .ok_or_else(|| OwsLibError::InvalidInput(format!("invalid Nano address: {to_address}")))?;
+
+    // Get current account state
+    let info = crate::nano_rpc::account_info(rpc_url, &from_address)?
+        .ok_or_else(|| OwsLibError::InvalidInput("account not opened (no balance)".into()))?;
+
+    let current_balance: u128 = info
+        .balance
+        .parse()
+        .map_err(|_| OwsLibError::InvalidInput("invalid balance from RPC".into()))?;
+
+    if amount_raw > current_balance {
+        return Err(OwsLibError::InvalidInput(format!(
+            "insufficient balance: have {} raw, need {} raw",
+            current_balance, amount_raw
+        )));
+    }
+
+    let new_balance = current_balance - amount_raw;
+
+    // Parse current state
+    let account_pubkey = nano_pubkey_from_address(&from_address)
+        .ok_or_else(|| OwsLibError::InvalidInput("failed to decode own address".into()))?;
+
+    let mut previous = [0u8; 32];
+    let prev_bytes = hex::decode(&info.frontier)
+        .map_err(|_| OwsLibError::InvalidInput("invalid frontier hex".into()))?;
+    previous.copy_from_slice(&prev_bytes);
+
+    let representative = nano_pubkey_from_address(&info.representative).ok_or_else(|| {
+        OwsLibError::InvalidInput("invalid representative in account_info".into())
+    })?;
+
+    // Build state block: link = destination pubkey for sends
+    let block = build_state_block(
+        &account_pubkey,
+        &previous,
+        &representative,
+        new_balance,
+        &dest_pubkey,
+    );
+
+    // Sign
+    let sign_output = signer.sign_transaction(private_key, &block)?;
+
+    // PoW (send threshold, root = previous)
+    let work =
+        crate::nano_rpc::work_generate(rpc_url, &info.frontier, crate::nano_rpc::SEND_DIFFICULTY)?;
+
+    // Build JSON block and publish
+    let block_json = serde_json::json!({
+        "type": "state",
+        "account": from_address,
+        "previous": info.frontier,
+        "representative": info.representative,
+        "balance": new_balance.to_string(),
+        "link": hex::encode(dest_pubkey),
+        "signature": hex::encode(&sign_output.signature),
+        "work": work
+    });
+
+    let block_hash = crate::nano_rpc::process_block(rpc_url, &block_json, "send")?;
+
+    Ok(NanoSendResult {
+        block_hash,
+        amount_raw: amount_raw.to_string(),
+    })
+}
+
+/// Query the balance of a Nano account derived from a private key.
+pub fn nano_balance(private_key: &[u8], rpc_url: &str) -> Result<NanoBalanceResult, OwsLibError> {
+    let signer = signer_for_chain(ChainType::Nano);
+    let address = signer.derive_address(private_key)?;
+
+    let info = crate::nano_rpc::account_info(rpc_url, &address)?;
+
+    let (balance_raw, frontier) = match &info {
+        Some(i) => (i.balance.clone(), Some(i.frontier.clone())),
+        None => ("0".to_string(), None),
+    };
+
+    let balance_u128: u128 = balance_raw.parse().unwrap_or(0);
+    let balance_xno = crate::nano_rpc::raw_to_xno(balance_u128);
+
+    // Check pending count
+    let pending = crate::nano_rpc::receivable(rpc_url, &address, 100, None)?;
+
+    Ok(NanoBalanceResult {
+        address,
+        balance_raw,
+        balance_xno,
+        frontier,
+        pending_count: pending.len(),
+    })
+}
+
+/// Receive all pending blocks for a Nano account.
+pub fn nano_receive(private_key: &[u8], rpc_url: &str) -> Result<NanoReceiveResult, OwsLibError> {
+    use ows_signer::chains::nano::{build_state_block, nano_address, nano_pubkey_from_address};
+
+    let signer = signer_for_chain(ChainType::Nano);
+    let address = signer.derive_address(private_key)?;
+    let account_pubkey = nano_pubkey_from_address(&address)
+        .ok_or_else(|| OwsLibError::InvalidInput("failed to decode own address".into()))?;
+
+    // Get pending blocks
+    let pending = crate::nano_rpc::receivable(rpc_url, &address, 10, None)?;
+
+    if pending.is_empty() {
+        // Return current balance
+        let info = crate::nano_rpc::account_info(rpc_url, &address)?;
+        let balance_raw = info
+            .as_ref()
+            .map(|i| i.balance.clone())
+            .unwrap_or_else(|| "0".into());
+        let balance_u128: u128 = balance_raw.parse().unwrap_or(0);
+        return Ok(NanoReceiveResult {
+            received: Vec::new(),
+            new_balance_raw: balance_raw,
+            new_balance_xno: crate::nano_rpc::raw_to_xno(balance_u128),
+        });
+    }
+
+    // Get current account state (may be unopened)
+    let account_state = crate::nano_rpc::account_info(rpc_url, &address)?;
+
+    let mut frontier = account_state
+        .as_ref()
+        .map(|s| s.frontier.clone())
+        .unwrap_or_else(|| "0".repeat(64));
+
+    let mut balance: u128 = account_state
+        .as_ref()
+        .map(|s| s.balance.parse().unwrap_or(0))
+        .unwrap_or(0);
+
+    let representative_addr = account_state
+        .as_ref()
+        .map(|s| s.representative.clone())
+        .unwrap_or_else(|| NANO_DEFAULT_REPRESENTATIVE.to_string());
+
+    let representative = nano_pubkey_from_address(&representative_addr)
+        .ok_or_else(|| OwsLibError::InvalidInput("invalid representative address".into()))?;
+
+    let mut is_open = account_state.is_none();
+    let mut results = Vec::new();
+
+    for block in &pending {
+        let amount: u128 = block.amount;
+        let new_balance = balance + amount;
+
+        let mut prev_bytes = [0u8; 32];
+        let decoded = hex::decode(&frontier)
+            .map_err(|_| OwsLibError::InvalidInput("invalid frontier hex".into()))?;
+        prev_bytes.copy_from_slice(&decoded);
+
+        let mut link = [0u8; 32];
+        let link_decoded = hex::decode(&block.hash)
+            .map_err(|_| OwsLibError::InvalidInput("invalid pending block hash hex".into()))?;
+        link.copy_from_slice(&link_decoded);
+
+        let state_block = build_state_block(
+            &account_pubkey,
+            &prev_bytes,
+            &representative,
+            new_balance,
+            &link,
+        );
+
+        let sign_output = signer.sign_transaction(private_key, &state_block)?;
+
+        // PoW root: account pubkey for open, frontier for subsequent receives
+        let work_root = if is_open {
+            hex::encode(account_pubkey)
+        } else {
+            frontier.clone()
+        };
+
+        let difficulty = crate::nano_rpc::RECEIVE_DIFFICULTY;
+        let work = crate::nano_rpc::work_generate(rpc_url, &work_root, difficulty)?;
+
+        let subtype = if is_open { "open" } else { "receive" };
+
+        let block_json = serde_json::json!({
+            "type": "state",
+            "account": address,
+            "previous": frontier,
+            "representative": nano_address(&representative),
+            "balance": new_balance.to_string(),
+            "link": block.hash,
+            "signature": hex::encode(&sign_output.signature),
+            "work": work
+        });
+
+        match crate::nano_rpc::process_block(rpc_url, &block_json, subtype) {
+            Ok(hash) => {
+                frontier = hash.clone();
+                balance = new_balance;
+                is_open = false;
+                results.push(NanoReceiveBlockResult {
+                    block_hash: hash,
+                    amount_raw: amount.to_string(),
+                    source: block.source.clone(),
+                });
+            }
+            Err(e) => {
+                eprintln!("warning: failed to receive block {}: {e}", block.hash);
+            }
+        }
+    }
+
+    Ok(NanoReceiveResult {
+        received: results,
+        new_balance_raw: balance.to_string(),
+        new_balance_xno: crate::nano_rpc::raw_to_xno(balance),
+    })
+}
+
 // --- internal helpers ---
 
 /// Decrypt a wallet and return the private key for the given chain.

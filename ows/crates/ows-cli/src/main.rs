@@ -53,6 +53,11 @@ enum Commands {
         #[command(subcommand)]
         subcommand: KeyCommands,
     },
+    /// Nano (XNO) wallet actions — send, receive, check balance
+    Nano {
+        #[command(subcommand)]
+        subcommand: NanoCommands,
+    },
     /// View configuration and RPC endpoints
     Config {
         #[command(subcommand)]
@@ -341,6 +346,52 @@ enum ConfigCommands {
     Show,
 }
 
+#[derive(Subcommand)]
+enum NanoCommands {
+    /// Send XNO to a Nano address
+    Send {
+        /// Wallet name or ID
+        #[arg(long, env = "OWS_WALLET")]
+        wallet: String,
+        /// Destination Nano address (nano_...)
+        #[arg(long)]
+        to: String,
+        /// Amount in XNO (e.g. "1.5" or "0.001")
+        #[arg(long)]
+        amount: String,
+        /// Account index
+        #[arg(long, default_value = "0")]
+        index: u32,
+        /// Output structured JSON instead of raw hash
+        #[arg(long)]
+        json: bool,
+    },
+    /// Check the balance of a Nano account
+    Balance {
+        /// Wallet name or ID
+        #[arg(long, env = "OWS_WALLET")]
+        wallet: String,
+        /// Account index
+        #[arg(long, default_value = "0")]
+        index: u32,
+        /// Output structured JSON
+        #[arg(long)]
+        json: bool,
+    },
+    /// Receive all pending blocks for a Nano account
+    Receive {
+        /// Wallet name or ID
+        #[arg(long, env = "OWS_WALLET")]
+        wallet: String,
+        /// Account index
+        #[arg(long, default_value = "0")]
+        index: u32,
+        /// Output structured JSON
+        #[arg(long)]
+        json: bool,
+    },
+}
+
 #[derive(Debug, thiserror::Error)]
 enum CliError {
     #[error("{0}")]
@@ -506,6 +557,25 @@ fn run(cli: Cli) -> Result<(), CliError> {
             } => commands::key::create(&name, &wallets, &policies, expires_at.as_deref()),
             KeyCommands::List => commands::key::list(),
             KeyCommands::Revoke { id, confirm } => commands::key::revoke(&id, confirm),
+        },
+        Commands::Nano { subcommand } => match subcommand {
+            NanoCommands::Send {
+                wallet,
+                to,
+                amount,
+                index,
+                json,
+            } => commands::nano_send::run(&wallet, &to, &amount, index, json),
+            NanoCommands::Balance {
+                wallet,
+                index,
+                json,
+            } => commands::nano_balance::run(&wallet, index, json),
+            NanoCommands::Receive {
+                wallet,
+                index,
+                json,
+            } => commands::nano_receive::run(&wallet, index, json),
         },
         Commands::Config { subcommand } => match subcommand {
             ConfigCommands::Show => commands::config::show(),

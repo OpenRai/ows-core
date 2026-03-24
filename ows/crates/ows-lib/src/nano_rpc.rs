@@ -191,3 +191,198 @@ pub fn process_block(
 /// PoW difficulty thresholds (as hex strings for work_generate RPC).
 pub const SEND_DIFFICULTY: &str = "fffffff800000000";
 pub const RECEIVE_DIFFICULTY: &str = "fffffe0000000000";
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Unit conversion (XNO ↔ raw)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// 1 XNO = 10^30 raw.
+const RAW_PER_XNO: u128 = 1_000_000_000_000_000_000_000_000_000_000;
+
+/// Convert a decimal XNO string to raw (u128).
+///
+/// Handles up to 30 decimal places (the full precision of raw).
+/// Returns `None` for invalid or over-precise input.
+pub fn xno_to_raw(xno: &str) -> Option<u128> {
+    let xno = xno.trim();
+    if xno.is_empty() {
+        return None;
+    }
+
+    let parts: Vec<&str> = xno.split('.').collect();
+    match parts.len() {
+        1 => {
+            let whole: u128 = parts[0].parse().ok()?;
+            whole.checked_mul(RAW_PER_XNO)
+        }
+        2 => {
+            let whole: u128 = if parts[0].is_empty() {
+                0
+            } else {
+                parts[0].parse().ok()?
+            };
+
+            let frac_str = parts[1];
+            if frac_str.len() > 30 {
+                return None;
+            }
+
+            let padded = format!("{:0<30}", frac_str);
+            let frac: u128 = padded.parse().ok()?;
+
+            whole.checked_mul(RAW_PER_XNO)?.checked_add(frac)
+        }
+        _ => None,
+    }
+}
+
+/// Convert raw (u128) to a decimal XNO string.
+///
+/// Always exact — includes enough decimal places with no trailing zeros.
+pub fn raw_to_xno(raw: u128) -> String {
+    let whole = raw / RAW_PER_XNO;
+    let frac = raw % RAW_PER_XNO;
+
+    if frac == 0 {
+        return format!("{}.0", whole);
+    }
+
+    let frac_str = format!("{:030}", frac);
+    let trimmed = frac_str.trim_end_matches('0');
+    format!("{}.{}", whole, trimmed)
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Additional RPC calls for wallet actions
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// A pending (receivable) block.
+#[derive(Debug, Clone)]
+pub struct PendingBlock {
+    /// Send block hash hex.
+    pub hash: String,
+    /// Amount in raw.
+    pub amount: u128,
+    /// Source address (sender).
+    pub source: String,
+}
+
+/// Query `receivable` (pending) blocks for a Nano account.
+///
+/// Returns pending send blocks sorted by amount (largest first).
+/// `min_raw` filters out sends below a minimum amount (node-side threshold).
+pub fn receivable(
+    rpc_url: &str,
+    account: &str,
+    count: u32,
+    min_raw: Option<u128>,
+) -> Result<Vec<PendingBlock>, OwsLibError> {
+    let mut req = serde_json::json!({
+        "action": "receivable",
+        "account": account,
+        "count": count.to_string(),
+        "source": "true",
+        "sorting": "true",
+    });
+
+    if let Some(min) = min_raw {
+        req["threshold"] = serde_json::Value::String(min.to_string());
+    }
+
+    let resp = nano_rpc_call(rpc_url, &req)?;
+
+    let blocks = match resp.get("blocks") {
+        Some(serde_json::Value::Object(map)) => map.clone(),
+        // Empty string or missing means no pending blocks
+        _ => return Ok(Vec::new()),
+    };
+
+    let mut result = Vec::new();
+    for (hash_hex, info) in &blocks {
+        let amount_str = info.get("amount").and_then(|v| v.as_str()).unwrap_or("0");
+        let amount: u128 = amount_str.parse().unwrap_or(0);
+
+        let source = info
+            .get("source")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+
+        result.push(PendingBlock {
+            hash: hash_hex.clone(),
+            amount,
+            source,
+        });
+    }
+
+    Ok(result)
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Tests
+// ─────────────────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_xno_to_raw_integer() {
+        assert_eq!(xno_to_raw("1"), Some(RAW_PER_XNO));
+        assert_eq!(xno_to_raw("0"), Some(0));
+        assert_eq!(xno_to_raw("2"), Some(2 * RAW_PER_XNO));
+    }
+
+    #[test]
+    fn test_xno_to_raw_decimal() {
+        assert_eq!(
+            xno_to_raw("0.000001"),
+            Some(1_000_000_000_000_000_000_000_000)
+        );
+        assert_eq!(
+            xno_to_raw("1.5"),
+            Some(RAW_PER_XNO + 500_000_000_000_000_000_000_000_000_000)
+        );
+    }
+
+    #[test]
+    fn test_xno_to_raw_full_precision() {
+        assert_eq!(xno_to_raw("0.000000000000000000000000000001"), Some(1));
+    }
+
+    #[test]
+    fn test_xno_to_raw_invalid() {
+        assert_eq!(xno_to_raw(""), None);
+        assert_eq!(xno_to_raw("abc"), None);
+        assert_eq!(xno_to_raw("1.2.3"), None);
+    }
+
+    #[test]
+    fn test_xno_to_raw_excess_precision() {
+        assert_eq!(xno_to_raw("0.0000000000000000000000000000001"), None);
+    }
+
+    #[test]
+    fn test_raw_to_xno() {
+        assert_eq!(raw_to_xno(RAW_PER_XNO), "1.0");
+        assert_eq!(raw_to_xno(0), "0.0");
+        assert_eq!(raw_to_xno(1_000_000_000_000_000_000_000_000), "0.000001");
+        assert_eq!(raw_to_xno(1), "0.000000000000000000000000000001");
+    }
+
+    #[test]
+    fn test_raw_to_xno_roundtrip() {
+        let amounts = [
+            0u128,
+            1,
+            RAW_PER_XNO,
+            1_000_000_000_000_000_000_000_000,
+            133_700_000_000_000_000_000_000_000_000,
+        ];
+        for &raw in &amounts {
+            let xno = raw_to_xno(raw);
+            let back = xno_to_raw(&xno).unwrap();
+            assert_eq!(raw, back, "roundtrip failed for raw={raw}");
+        }
+    }
+}
