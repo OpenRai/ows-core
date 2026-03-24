@@ -63,6 +63,7 @@ impl Config {
             "sui:mainnet".into(),
             "https://fullnode.mainnet.sui.io:443".into(),
         );
+        rpc.insert("nano:mainnet".into(), "https://nanoslo.0x.no/proxy".into());
         rpc
     }
 }
@@ -242,7 +243,7 @@ mod tests {
     fn test_load_or_default_nonexistent() {
         let config = Config::load_or_default_from(std::path::Path::new("/nonexistent/config.json"));
         // Should have all default RPCs
-        assert_eq!(config.rpc.len(), 14);
+        assert_eq!(config.rpc.len(), 15);
         assert_eq!(config.rpc_url("eip155:1"), Some("https://eth.llamarpc.com"));
     }
 

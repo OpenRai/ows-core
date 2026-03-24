@@ -14,10 +14,11 @@ pub enum ChainType {
     Spark,
     Filecoin,
     Sui,
+    Nano,
 }
 
 /// All supported chain families, used for universal wallet derivation.
-pub const ALL_CHAIN_TYPES: [ChainType; 8] = [
+pub const ALL_CHAIN_TYPES: [ChainType; 9] = [
     ChainType::Evm,
     ChainType::Solana,
     ChainType::Bitcoin,
@@ -26,6 +27,7 @@ pub const ALL_CHAIN_TYPES: [ChainType; 8] = [
     ChainType::Ton,
     ChainType::Filecoin,
     ChainType::Sui,
+    ChainType::Nano,
 ];
 
 /// A specific chain (e.g. "ethereum", "arbitrum") with its family type and CAIP-2 ID.
@@ -113,6 +115,11 @@ pub const KNOWN_CHAINS: &[Chain] = &[
         chain_type: ChainType::Sui,
         chain_id: "sui:mainnet",
     },
+    Chain {
+        name: "nano",
+        chain_type: ChainType::Nano,
+        chain_id: "nano:mainnet",
+    },
 ];
 
 /// Parse a chain string into a `Chain`. Accepts:
@@ -177,6 +184,7 @@ impl ChainType {
             ChainType::Spark => "spark",
             ChainType::Filecoin => "fil",
             ChainType::Sui => "sui",
+            ChainType::Nano => "nano",
         }
     }
 
@@ -192,6 +200,7 @@ impl ChainType {
             ChainType::Spark => 8797555,
             ChainType::Filecoin => 461,
             ChainType::Sui => 784,
+            ChainType::Nano => 165,
         }
     }
 
@@ -207,6 +216,7 @@ impl ChainType {
             "spark" => Some(ChainType::Spark),
             "fil" => Some(ChainType::Filecoin),
             "sui" => Some(ChainType::Sui),
+            "nano" => Some(ChainType::Nano),
             _ => None,
         }
     }
@@ -224,6 +234,7 @@ impl fmt::Display for ChainType {
             ChainType::Spark => "spark",
             ChainType::Filecoin => "filecoin",
             ChainType::Sui => "sui",
+            ChainType::Nano => "nano",
         };
         write!(f, "{}", s)
     }
@@ -243,6 +254,7 @@ impl FromStr for ChainType {
             "spark" => Ok(ChainType::Spark),
             "filecoin" => Ok(ChainType::Filecoin),
             "sui" => Ok(ChainType::Sui),
+            "nano" => Ok(ChainType::Nano),
             _ => Err(format!("unknown chain type: {}", s)),
         }
     }
@@ -273,6 +285,7 @@ mod tests {
             (ChainType::Spark, "\"spark\""),
             (ChainType::Filecoin, "\"filecoin\""),
             (ChainType::Sui, "\"sui\""),
+            (ChainType::Nano, "\"nano\""),
         ] {
             let json = serde_json::to_string(&chain).unwrap();
             assert_eq!(json, expected);
@@ -292,6 +305,7 @@ mod tests {
         assert_eq!(ChainType::Spark.namespace(), "spark");
         assert_eq!(ChainType::Filecoin.namespace(), "fil");
         assert_eq!(ChainType::Sui.namespace(), "sui");
+        assert_eq!(ChainType::Nano.namespace(), "nano");
     }
 
     #[test]
@@ -305,6 +319,7 @@ mod tests {
         assert_eq!(ChainType::Spark.default_coin_type(), 8797555);
         assert_eq!(ChainType::Filecoin.default_coin_type(), 461);
         assert_eq!(ChainType::Sui.default_coin_type(), 784);
+        assert_eq!(ChainType::Nano.default_coin_type(), 165);
     }
 
     #[test]
@@ -321,6 +336,7 @@ mod tests {
         assert_eq!(ChainType::from_namespace("spark"), Some(ChainType::Spark));
         assert_eq!(ChainType::from_namespace("fil"), Some(ChainType::Filecoin));
         assert_eq!(ChainType::from_namespace("sui"), Some(ChainType::Sui));
+        assert_eq!(ChainType::from_namespace("nano"), Some(ChainType::Nano));
         assert_eq!(ChainType::from_namespace("unknown"), None);
     }
 
@@ -372,7 +388,7 @@ mod tests {
 
     #[test]
     fn test_all_chain_types() {
-        assert_eq!(ALL_CHAIN_TYPES.len(), 8);
+        assert_eq!(ALL_CHAIN_TYPES.len(), 9);
     }
 
     #[test]
