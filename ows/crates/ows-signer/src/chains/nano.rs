@@ -430,7 +430,7 @@ mod tests {
 
     #[test]
     fn test_address_wrong_prefix() {
-        let bad = "xrb_1pu7p5n3ghq1i1p4rhmek41f5add1uh34xpb94nkbxe8g4a6x1p69emk8y1d";
+        let bad = "nanox_1pu7p5n3ghq1i1p4rhmek41f5add1uh34xpb94nkbxe8g4a6x1p69emk8y1d";
         assert!(nano_pubkey_from_address(bad).is_none());
     }
 
