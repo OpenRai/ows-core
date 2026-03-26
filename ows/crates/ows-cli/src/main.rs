@@ -227,15 +227,21 @@ enum FundCommands {
         /// Wallet name or ID
         #[arg(long, env = "OWS_WALLET")]
         wallet: String,
-        /// Funding provider (default: moonpay)
+        /// Funding provider (default: moonpay; alternatives: nanswap)
         #[arg(long, default_value = "moonpay")]
         provider: String,
         /// Asset to receive (default: USDC)
         #[arg(long, default_value = "USDC")]
         asset: String,
-        /// Destination chain/network in the wallet (default: base)
+        /// Destination chain/network in the wallet (example: base, nano)
         #[arg(long)]
         chain: Option<String>,
+        /// Source asset for swap-based providers (example: USDC-BASE)
+        #[arg(long)]
+        source_asset: Option<String>,
+        /// Source amount for swap-based providers
+        #[arg(long)]
+        amount: Option<f64>,
     },
     /// Check balances for a wallet via a provider that supports balance lookup
     Balance {
@@ -475,11 +481,15 @@ fn run(cli: Cli) -> Result<(), CliError> {
                 provider,
                 asset,
                 chain,
+                source_asset,
+                amount,
             } => commands::fund::run(
                 &provider,
                 &wallet,
                 chain.as_deref(),
                 Some(&asset),
+                source_asset.as_deref(),
+                amount,
             ),
             FundCommands::Balance {
                 wallet,

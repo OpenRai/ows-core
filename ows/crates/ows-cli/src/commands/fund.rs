@@ -19,11 +19,14 @@ fn wallet_address_for_chain(wallet_name: &str, chain: &str) -> Result<String, Cl
 }
 
 /// `ows fund deposit --provider moonpay --wallet <name> --asset USDC --chain base`
+/// `ows fund deposit --provider nanswap --wallet <name> --asset XNO --chain nano --source-asset USDC-BASE --amount 10`
 pub fn run(
     provider: &str,
     wallet_name: &str,
     chain: Option<&str>,
     asset: Option<&str>,
+    source_asset: Option<&str>,
+    amount: Option<f64>,
 ) -> Result<(), CliError> {
     let provider: FundProvider = provider.parse().map_err(CliError::InvalidArgs)?;
     let asset = asset.unwrap_or("USDC");
@@ -45,6 +48,12 @@ pub fn run(
     );
     eprintln!("Asset: {}", target.asset);
     eprintln!("Destination chain: {}", target.wallet_chain_name);
+    if let Some(source_asset) = source_asset {
+        eprintln!("Source asset: {source_asset}");
+    }
+    if let Some(amount) = amount {
+        eprintln!("Amount: {amount}");
+    }
 
     let rt =
         tokio::runtime::Runtime::new().map_err(|e| CliError::InvalidArgs(format!("tokio: {e}")))?;
@@ -54,6 +63,8 @@ pub fn run(
         destination_address: target.destination_address,
         asset: target.asset,
         chain: target.chain,
+        source_asset: source_asset.map(ToOwned::to_owned),
+        amount,
     }))?;
 
     eprintln!();
@@ -133,4 +144,5 @@ pub fn providers() {
     println!(
         "moonpay  default provider: fiat/hosted deposit flow into wallet tokens on supported EVM chains"
     );
+    println!("nanswap  crypto-to-crypto swap flow into a wallet address (requires source asset and amount)");
 }

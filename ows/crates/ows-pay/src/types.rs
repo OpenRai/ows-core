@@ -210,12 +210,14 @@ pub struct Pagination {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FundProvider {
     MoonPay,
+    Nanswap,
 }
 
 impl FundProvider {
     pub fn as_str(&self) -> &'static str {
         match self {
             FundProvider::MoonPay => "moonpay",
+            FundProvider::Nanswap => "nanswap",
         }
     }
 }
@@ -232,6 +234,7 @@ impl FromStr for FundProvider {
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s.to_ascii_lowercase().as_str() {
             "moonpay" => Ok(FundProvider::MoonPay),
+            "nanswap" => Ok(FundProvider::Nanswap),
             other => Err(format!("unsupported funding provider: {other}")),
         }
     }
@@ -243,6 +246,8 @@ pub struct FundRequest {
     pub destination_address: String,
     pub asset: String,
     pub chain: Option<String>,
+    pub source_asset: Option<String>,
+    pub amount: Option<f64>,
 }
 
 /// Minimal wallet account view needed for provider funding resolution.
@@ -327,4 +332,42 @@ pub struct FundResult {
     pub wallets: Vec<(String, String)>,
     pub instructions: String,
     pub details: Vec<(String, String)>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct NanswapEstimateResponse {
+    #[serde(rename = "amountFrom")]
+    pub amount_from: f64,
+    #[serde(rename = "amountTo")]
+    pub amount_to: f64,
+    #[serde(rename = "transactionSpeedForecast")]
+    pub transaction_speed_forecast: Option<String>,
+    #[serde(rename = "warningMessage")]
+    pub warning_message: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct NanswapCreateOrderRequest {
+    pub from: String,
+    pub to: String,
+    pub amount: f64,
+    #[serde(rename = "toAddress")]
+    pub to_address: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct NanswapCreateOrderResponse {
+    pub id: String,
+    pub from: String,
+    pub to: String,
+    #[serde(rename = "expectedAmountFrom")]
+    pub expected_amount_from: f64,
+    #[serde(rename = "expectedAmountTo")]
+    pub expected_amount_to: f64,
+    #[serde(rename = "payinAddress")]
+    pub payin_address: String,
+    #[serde(rename = "payoutAddress")]
+    pub payout_address: String,
+    #[serde(rename = "fullLink")]
+    pub full_link: Option<String>,
 }
