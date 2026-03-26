@@ -321,7 +321,10 @@ mod tests {
     #[test]
     fn format_price_dispatches() {
         assert_eq!(format_price("10000", "eip155:8453"), "$0.01");
-        assert_eq!(format_price("1000000000000000000000000000000", "nano:mainnet"), "1 NANO");
+        assert_eq!(
+            format_price("1000000000000000000000000000000", "nano:mainnet"),
+            "1 NANO"
+        );
     }
 
     // -----------------------------------------------------------------------
