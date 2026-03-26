@@ -36,6 +36,13 @@ def test_derive_address_ethereum():
     assert len(address) == 42
 
 
+def test_derive_address_all_supported_chains():
+    phrase = ows.generate_mnemonic(12)
+    for chain in ["evm", "solana", "sui", "bitcoin", "cosmos", "tron", "ton", "filecoin", "nano"]:
+        address = ows.derive_address(phrase, chain)
+        assert len(address) > 0
+
+
 def test_create_and_list_wallets(vault_dir):
     wallet = ows.create_wallet("test-wallet", vault_path_opt=vault_dir)
     assert wallet["name"] == "test-wallet"
