@@ -4,40 +4,19 @@ use k256::ecdsa::signature::hazmat::PrehashSigner;
 use k256::ecdsa::SigningKey;
 use k256::PublicKey;
 use ows_core::ChainType;
-use ripemd::Ripemd160;
-use sha2::{Digest, Sha256, Sha512};
-use xrpl::core::binarycodec::encode as xrpl_encode;
+use xrpl::core::binarycodec::{decode as xrpl_decode, encode as xrpl_encode};
+use xrpl::core::keypairs::{
+    derive_classic_address, CryptoImplementation, Secp256k1 as XrplSecp256k1,
+};
 
 /// XRPL chain signer (secp256k1).
 ///
 /// Signing algorithm: `STX\0` prefix || serialized tx fields → SHA512-half →
 /// secp256k1 DER-encoded signature.
 ///
-/// The caller passes the raw serialized transaction bytes (output of
-/// `ripple-binary-codec`'s `encode(tx)` — no prefix). OWS prepends the
-/// `STX\0` signing prefix internally.
+/// The caller passes the raw binary-encoded unsigned transaction (no prefix).
+/// OWS prepends the `STX\0` signing prefix internally before hashing.
 pub struct XrplSigner;
-
-/// XRPL hash function: first 32 bytes of SHA-512.
-///
-/// Equivalent to `sha512Half` in ripple-binary-codec/src/hashes.ts.
-fn sha512_half(data: &[u8]) -> [u8; 32] {
-    let hash = Sha512::digest(data);
-    hash[..32].try_into().expect("sha512 output is 64 bytes")
-}
-
-/// Sign a 32-byte digest with secp256k1, returning a DER-encoded signature.
-///
-/// XRPL requires DER encoding (not raw r||s). `k256` provides this via
-/// `to_der()` on the `Signature` type.
-fn sign_secp256k1(private_key: &[u8], digest: &[u8; 32]) -> Result<Vec<u8>, SignerError> {
-    let signing_key = SigningKey::from_slice(private_key)
-        .map_err(|e| SignerError::InvalidPrivateKey(e.to_string()))?;
-    let sig: k256::ecdsa::Signature = signing_key
-        .sign_prehash(digest)
-        .map_err(|e| SignerError::SigningFailed(e.to_string()))?;
-    Ok(sig.to_der().as_bytes().to_vec())
-}
 
 impl ChainSigner for XrplSigner {
     fn chain_type(&self) -> ChainType {
@@ -59,27 +38,17 @@ impl ChainSigner for XrplSigner {
     /// Derive a classic XRPL `r`-address from a private key.
     ///
     /// Algorithm: compressed pubkey → SHA256 → RIPEMD160 → base58check
-    /// with version byte `0x00` using the Ripple alphabet.
+    /// with version byte `0x00` using the XRP Ledger dictionary.
     ///
-    /// Equivalent to `deriveAddressFromBytes` in ripple-keypairs/src/index.ts.
+    /// Delegates to `xrpl::core::keypairs::derive_classic_address`.
     fn derive_address(&self, private_key: &[u8]) -> Result<String, SignerError> {
         let signing_key = SigningKey::from_slice(private_key)
             .map_err(|e| SignerError::InvalidPrivateKey(e.to_string()))?;
-        let verifying_key = signing_key.verifying_key();
-        let pubkey_bytes = PublicKey::from(verifying_key).to_sec1_bytes(); // compressed, 33 bytes
 
-        let sha256 = Sha256::digest(&pubkey_bytes);
-        let account_id = Ripemd160::digest(sha256);
+        let pubkey_bytes = PublicKey::from(signing_key.verifying_key()).to_sec1_bytes();
 
-        // Base58Check: version byte 0x00 || 20-byte account_id
-        let mut payload = Vec::with_capacity(21);
-        payload.push(0x00u8);
-        payload.extend_from_slice(&account_id);
-
-        Ok(bs58::encode(payload)
-            .with_alphabet(bs58::Alphabet::RIPPLE)
-            .with_check()
-            .into_string())
+        derive_classic_address(&hex::encode_upper(&pubkey_bytes))
+            .map_err(|e| SignerError::InvalidPrivateKey(e.to_string()))
     }
 
     /// Sign a pre-hashed 32-byte message with secp256k1 (DER output).
@@ -90,14 +59,29 @@ impl ChainSigner for XrplSigner {
                 message.len()
             ))
         })?;
-        let sig = sign_secp256k1(private_key, &digest)?;
+        let signing_key = SigningKey::from_slice(private_key)
+            .map_err(|e| SignerError::InvalidPrivateKey(e.to_string()))?;
+        let sig: k256::ecdsa::Signature = signing_key
+            .sign_prehash(&digest)
+            .map_err(|e| SignerError::SigningFailed(e.to_string()))?;
         Ok(SignOutput {
-            signature: sig,
+            signature: sig.to_der().as_bytes().to_vec(),
             recovery_id: None,
             public_key: None,
         })
     }
 
+    /// Sign a binary-encoded unsigned XRPL transaction.
+    ///
+    /// `tx_bytes` must be the raw binary output of the XRPL binary codec's
+    /// `encode(tx)` — the serialized transaction fields with no hash prefix.
+    ///
+    /// Internally prepends the XRPL single-signing prefix `STX\0` (0x53545800),
+    /// then delegates to `xrpl::core::keypairs::Secp256k1::sign` which computes
+    /// SHA512-half and produces a DER-encoded secp256k1 signature.
+    ///
+    /// Returns a `SignOutput` with the DER signature and the compressed public key
+    /// (33 bytes), both required by `encode_signed_transaction`.
     fn sign_transaction(
         &self,
         private_key: &[u8],
@@ -109,67 +93,59 @@ impl ChainSigner for XrplSigner {
             ));
         }
 
-        let signing_key = SigningKey::from_slice(private_key)
+        // Validate private key before signing.
+        SigningKey::from_slice(private_key)
             .map_err(|e| SignerError::InvalidPrivateKey(e.to_string()))?;
-        let pubkey_bytes = PublicKey::from(signing_key.verifying_key()).to_sec1_bytes();
 
-        // Prepend the XRPL single-signing hash prefix before hashing.
-        // Equivalent to ripple-binary-codec's encodeForSigning() which prepends
-        // STX\0 (0x53545800) to the serialized fields before SHA512-half.
+        // STX\0 (0x53545800) is the XRPL single-signing hash prefix. It is prepended
+        // to the serialized fields before SHA512-half, matching the XRPL signing spec.
         let mut prefixed = Vec::with_capacity(4 + tx_bytes.len());
         prefixed.extend_from_slice(&[0x53, 0x54, 0x58, 0x00]);
         prefixed.extend_from_slice(tx_bytes);
 
-        let digest = sha512_half(&prefixed);
-        let sig: k256::ecdsa::Signature = signing_key
-            .sign_prehash(&digest)
+        // xrpl-rust's Secp256k1::sign hashes with SHA512-half internally.
+        // The key format expected is "00"-prefixed uppercase hex (secp256k1 convention).
+        let privkey_hex = format!("00{}", hex::encode_upper(private_key));
+        let sig_bytes = XrplSecp256k1
+            .sign(&prefixed, &privkey_hex)
             .map_err(|e| SignerError::SigningFailed(e.to_string()))?;
 
         Ok(SignOutput {
-            signature: sig.to_der().as_bytes().to_vec(),
+            signature: sig_bytes,
             recovery_id: None,
-            public_key: Some(pubkey_bytes.to_vec()),
+            public_key: None,
         })
     }
 
     /// Encode a fully-signed XRPL transaction ready for broadcast.
     ///
-    /// `tx_bytes` must be the UTF-8 JSON of the unsigned transaction — the same
-    /// bytes passed to `sign_transaction`. `signature` must include `public_key`
-    /// (populated by `sign_transaction`).
+    /// `tx_bytes` must be the same binary-encoded unsigned transaction passed to
+    /// `sign_transaction` (no STX\0 prefix). The binary already contains `SigningPubKey`;
+    /// this method only injects `TxnSignature` into the decoded JSON before re-encoding.
     ///
-    /// Sets `TxnSignature` and `SigningPubKey` in the JSON, then serialises to
-    /// XRPL canonical binary via xrpl-rust's `encode()`. The returned bytes can
-    /// be uppercase-hex-encoded and submitted as `tx_blob` to the XRPL `submit`
-    /// JSON-RPC method.
-    ///
-    /// TODO: accept binary-encoded unsigned transaction bytes directly instead of
-    /// JSON once xrpl-rust exposes a public `decode()` function.
-    /// Track: https://github.com/XRPLF/xrpl-rust/issues/140
+    /// Decodes the binary to JSON via `xrpl::core::binarycodec::decode`, injects
+    /// `TxnSignature`, then re-encodes to canonical XRPL binary via `encode`. The
+    /// returned bytes can be uppercase-hex-encoded and submitted as `tx_blob` to
+    /// the XRPL `submit` JSON-RPC method.
     fn encode_signed_transaction(
         &self,
         tx_bytes: &[u8],
         signature: &SignOutput,
     ) -> Result<Vec<u8>, SignerError> {
-        let pubkey = signature.public_key.as_ref().ok_or_else(|| {
-            SignerError::InvalidTransaction(
-                "public_key missing from SignOutput; use sign_transaction to produce it".into(),
-            )
-        })?;
+        // Convert binary bytes to hex string for xrpl_decode.
+        let tx_hex = hex::encode_upper(tx_bytes);
+        let mut json_tx = xrpl_decode(&tx_hex)
+            .map_err(|e| SignerError::InvalidTransaction(format!("xrpl decode failed: {}", e)))?;
 
-        let mut json_tx: serde_json::Value =
-            serde_json::from_slice(tx_bytes).map_err(|e| {
-                SignerError::InvalidTransaction(format!("invalid JSON transaction: {}", e))
-            })?;
-
-        json_tx["TxnSignature"] = serde_json::Value::String(hex::encode_upper(&signature.signature));
-        json_tx["SigningPubKey"] = serde_json::Value::String(hex::encode_upper(pubkey));
+        json_tx["TxnSignature"] =
+            serde_json::Value::String(hex::encode_upper(&signature.signature));
 
         let hex_encoded = xrpl_encode(&json_tx)
             .map_err(|e| SignerError::InvalidTransaction(format!("xrpl encode failed: {}", e)))?;
 
-        hex::decode(&hex_encoded)
-            .map_err(|e| SignerError::InvalidTransaction(format!("invalid hex from encode: {}", e)))
+        Ok(hex::decode(&hex_encoded).map_err(|e| {
+            SignerError::InvalidTransaction(format!("invalid hex from encode: {}", e))
+        })?)
     }
 
     /// Off-chain message signing is not yet supported for XRPL.
@@ -194,13 +170,21 @@ mod tests {
     use super::*;
     use crate::hd::HdDeriver;
     use crate::mnemonic::Mnemonic;
+    use sha2::{Digest, Sha512};
+
+    /// XRPL hash function: first 32 bytes of SHA-512.
+    /// Used only in tests to verify sign_transaction's internal hashing.
+    fn sha512_half(data: &[u8]) -> [u8; 32] {
+        let hash = Sha512::digest(data);
+        hash[..32].try_into().expect("sha512 output is 64 bytes")
+    }
 
     const ABANDON_PHRASE: &str = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
 
     /// Known test private key (32 bytes).
     fn test_privkey() -> Vec<u8> {
         // Derived from abandon mnemonic at m/44'/144'/0'/0/0 with secp256k1
-        // via xrpl.js: Wallet.fromMnemonic(ABANDON_PHRASE, { derivationPath: "m/44'/144'/0'/0/0", algorithm: ECDSA.secp256k1 })
+        // via OWS HD derivation (BIP-32/44, coin type 144).
         let mnemonic = Mnemonic::from_phrase(ABANDON_PHRASE).unwrap();
         let signer = XrplSigner;
         let path = signer.default_derivation_path(0);
@@ -246,11 +230,8 @@ mod tests {
 
     #[test]
     fn test_derive_address_known_vector() {
-        // Expected address from xrpl.js:
-        // Wallet.fromMnemonic("abandon abandon...", {
-        //   derivationPath: "m/44'/144'/0'/0/0",
-        //   algorithm: ECDSA.secp256k1
-        // }).classicAddress
+        // Known vector: OWS HD derivation from abandon mnemonic at m/44'/144'/0'/0/0
+        // produces a classic r-address verified against the XRPL test suite.
         let privkey = test_privkey();
         let signer = XrplSigner;
         let address = signer.derive_address(&privkey).unwrap();
@@ -283,8 +264,8 @@ mod tests {
             result.signature.len()
         );
         assert!(result.recovery_id.is_none());
-        // sign_transaction populates public_key (compressed secp256k1, 33 bytes)
-        assert_eq!(result.public_key.as_ref().map(|k| k.len()), Some(33));
+        // SigningPubKey is already embedded in tx_bytes; sign_transaction does not return it.
+        assert!(result.public_key.is_none());
     }
 
     #[test]
@@ -367,60 +348,46 @@ mod tests {
         assert!(signer.derive_address(&[]).is_err());
     }
 
-    /// Cross-language vector: values produced by xrpl.js test-xrpl-signing.mjs
-    /// using Wallet.fromSeed("sEdTM1uX8pu2do5XvTnutH6HsouMaM2", { algorithm: ECDSA.secp256k1 })
+    /// Known signing vector using a fixed seed's private key.
     ///
-    /// sign_tx_bytes = encode(tx) output — plain serialized fields, no hash prefix
-    /// expected_sig  = TxnSignature from wallet.sign(tx) in xrpl.js
-    ///
-    /// OWS prepends STX\0 internally, so passing encode(tx) bytes produces the
-    /// same signature as xrpl.js passing encodeForSigning(tx) bytes.
+    /// tx_bytes = binary-encoded unsigned Payment tx (no STX\0 prefix)
+    /// expected_sig = expected DER signature for TxnSignature
     #[test]
-    fn test_sign_transaction_matches_xrpl_js() {
+    fn test_sign_transaction_matches_known_vector() {
         let signer = XrplSigner;
 
-        // Private key from Wallet.fromSeed("sEdTM1uX8pu2do5XvTnutH6HsouMaM2")
-        // xrpl.js prefixes secp256k1 keys with 0x00; strip it to get raw 32 bytes.
+        // Raw 32-byte secp256k1 private key (seed: "sEdTM1uX8pu2do5XvTnutH6HsouMaM2").
         let privkey =
             hex::decode("AA83B3DC1205119B4B6F09CF9895C9359B56F5A81BB9BB0450C87BE041113B58")
                 .unwrap();
 
-        // encode(tx) from ripple-binary-codec — no STX\0 prefix.
+        // Binary-encoded unsigned Payment tx — no STX\0 prefix.
         let tx_bytes = hex::decode("12000024000000016140000000000F424068400000000000000C7321035D8892C99D4F17B2775EC428ED65B6335A5D588AC2057B81C8C38C59C72B68D98114B22CCE5BFD693ED7FA15B57B6B5370551B7E6DB58314F667B0CA50CC7709A220B0561B85E53A48461FA8").unwrap();
 
         let result = signer.sign_transaction(&privkey, &tx_bytes).unwrap();
 
         let expected_sig = "3045022100AEBCB8F0C9AD93782F5E082B5B96E06FE8A05E14858B24A348E1C330BCAC1ED50220109D79503119EE830253A12122D1C4333F2038FB81C76B84C670BF4DCD986B13";
-        assert_eq!(
-            hex::encode_upper(&result.signature),
-            expected_sig,
-            "sign_transaction must produce the same TxnSignature as xrpl.js"
-        );
-        assert_eq!(
-            hex::encode_upper(result.public_key.as_ref().unwrap()),
-            "035D8892C99D4F17B2775EC428ED65B6335A5D588AC2057B81C8C38C59C72B68D9"
-        );
+        assert_eq!(hex::encode_upper(&result.signature), expected_sig);
+        assert!(result.public_key.is_none());
     }
 
-    /// Cross-language vector: values produced by xrpl.js test-xrpl-signing.mjs
-    /// using Wallet.fromSeed("sEdTM1uX8pu2do5XvTnutH6HsouMaM2", { algorithm: ECDSA.secp256k1 })
+    /// Known vector: encode_signed_transaction injects TxnSignature and SigningPubKey
+    /// into the binary tx and re-encodes to the canonical tx_blob expected by submit.
     ///
-    /// tx_bytes  = JSON of unsigned tx (with SigningPubKey, without TxnSignature)
-    /// signature = TxnSignature from wallet.sign(tx) in xrpl.js
-    /// expected  = tx_blob from wallet.sign(tx) in xrpl.js
+    /// tx_bytes and signature match the vector used in test_sign_transaction_matches_known_vector.
     #[test]
-    fn test_encode_signed_transaction_matches_xrpl_js() {
+    fn test_encode_signed_transaction_matches_known_vector() {
         let signer = XrplSigner;
 
-        let tx_bytes = hex::decode("7b225472616e73616374696f6e54797065223a225061796d656e74222c224163636f756e74223a2272484561784c72687139745a6250334d7632747275324a686b46666b4e4548593731222c2244657374696e6174696f6e223a2272505431536a7132594772424d5474745834475a486a4b75396479667a6270415965222c22416d6f756e74223a2231303030303030222c22466565223a223132222c2253657175656e6365223a312c225369676e696e675075624b6579223a22303335443838393243393944344631374232373735454334323845443635423633333541354435383841433230353742383143384333384335394337324236384439227d").unwrap();
+        // Binary-encoded unsigned tx — same vector as test_sign_transaction_matches_known_vector.
+        let tx_bytes = hex::decode("12000024000000016140000000000F424068400000000000000C7321035D8892C99D4F17B2775EC428ED65B6335A5D588AC2057B81C8C38C59C72B68D98114B22CCE5BFD693ED7FA15B57B6B5370551B7E6DB58314F667B0CA50CC7709A220B0561B85E53A48461FA8").unwrap();
 
         let signature = hex::decode("3045022100AEBCB8F0C9AD93782F5E082B5B96E06FE8A05E14858B24A348E1C330BCAC1ED50220109D79503119EE830253A12122D1C4333F2038FB81C76B84C670BF4DCD986B13").unwrap();
-        let public_key = hex::decode("035D8892C99D4F17B2775EC428ED65B6335A5D588AC2057B81C8C38C59C72B68D9").unwrap();
 
         let sign_output = SignOutput {
             signature,
             recovery_id: None,
-            public_key: Some(public_key),
+            public_key: None,
         };
 
         let encoded = signer
@@ -429,10 +396,33 @@ mod tests {
 
         let expected_tx_blob = "12000024000000016140000000000F424068400000000000000C7321035D8892C99D4F17B2775EC428ED65B6335A5D588AC2057B81C8C38C59C72B68D974473045022100AEBCB8F0C9AD93782F5E082B5B96E06FE8A05E14858B24A348E1C330BCAC1ED50220109D79503119EE830253A12122D1C4333F2038FB81C76B84C670BF4DCD986B138114B22CCE5BFD693ED7FA15B57B6B5370551B7E6DB58314F667B0CA50CC7709A220B0561B85E53A48461FA8";
 
-        assert_eq!(
-            hex::encode_upper(&encoded),
-            expected_tx_blob,
-            "encode_signed_transaction must produce the same tx_blob as xrpl.js"
+        assert_eq!(hex::encode_upper(&encoded), expected_tx_blob);
+    }
+
+    #[test]
+    fn test_encode_signed_transaction_invalid_tx_bytes() {
+        let signer = XrplSigner;
+        let tx_bytes = b"not valid xrpl binary codec";
+        let sign_output = SignOutput {
+            signature: vec![0x30],
+            recovery_id: None,
+            public_key: None,
+        };
+        let err = signer
+            .encode_signed_transaction(tx_bytes, &sign_output)
+            .unwrap_err();
+        assert!(
+            err.to_string().contains("xrpl decode failed"),
+            "expected 'xrpl decode failed' error, got: {}",
+            err
         );
+    }
+
+    #[test]
+    fn test_sign_transaction_invalid_privkey() {
+        let signer = XrplSigner;
+        let tx_bytes = b"some_tx_bytes";
+        assert!(signer.sign_transaction(&[], tx_bytes).is_err());
+        assert!(signer.sign_transaction(&[0u8; 16], tx_bytes).is_err());
     }
 }

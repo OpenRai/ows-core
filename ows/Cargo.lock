@@ -3419,8 +3419,6 @@ dependencies = [
 [[package]]
 name = "xrpl-rust"
 version = "1.0.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5835a0c4319e51423a12bd3244857dad7517472733c33729dca294e217088063"
 dependencies = [
  "bigdecimal",
  "bs58",
@@ -3457,8 +3455,6 @@ dependencies = [
 [[package]]
 name = "xrpl-rust-macros"
 version = "0.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c9c5a56d688dd492c201011c19933a9d0e64452d3763bc88624dde91fff37164"
 dependencies = [
  "proc-macro2",
  "quote",

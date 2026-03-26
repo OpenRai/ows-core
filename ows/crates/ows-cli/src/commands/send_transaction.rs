@@ -1,4 +1,4 @@
-use crate::{audit, CliError};
+use crate::{audit, parse_chain, CliError};
 
 pub fn run(
     chain_str: &str,
@@ -38,15 +38,16 @@ pub fn run(
         return Ok(());
     }
 
-    // TESTING: broadcast a pre-signed blob directly, bypassing key resolution
-    // and signing. Used to verify the XRPL broadcast path in isolation.
-    // Restore sign_encode_and_broadcast (and the key resolution above it) for
-    // production once the full sign → encode → broadcast pipeline is validated.
+    // Owner mode: resolve key directly and sign → encode → broadcast.
+    let chain = parse_chain(chain_str)?;
+    let key = super::resolve_signing_key(wallet_name, chain.chain_type, index)?;
+
     let tx_hex_clean = tx_hex.strip_prefix("0x").unwrap_or(tx_hex);
     let tx_bytes = hex::decode(tx_hex_clean)
         .map_err(|e| CliError::InvalidArgs(format!("invalid hex transaction: {e}")))?;
 
-    let result = ows_lib::broadcast_signed(chain_str, &tx_bytes, rpc_url_override)?;
+    let result =
+        ows_lib::sign_encode_and_broadcast(key.expose(), chain_str, &tx_bytes, rpc_url_override)?;
 
     if json_output {
         let obj = serde_json::json!({

@@ -120,6 +120,16 @@ pub const KNOWN_CHAINS: &[Chain] = &[
         chain_type: ChainType::Xrpl,
         chain_id: "xrpl:mainnet",
     },
+    Chain {
+        name: "xrpl-testnet",
+        chain_type: ChainType::Xrpl,
+        chain_id: "xrpl:testnet",
+    },
+    Chain {
+        name: "xrpl-devnet",
+        chain_type: ChainType::Xrpl,
+        chain_id: "xrpl:devnet",
+    },
 ];
 
 /// Parse a chain string into a `Chain`. Accepts:
@@ -379,6 +389,26 @@ mod tests {
     fn test_parse_chain_solana() {
         let chain = parse_chain("solana").unwrap();
         assert_eq!(chain.chain_type, ChainType::Solana);
+    }
+
+    #[test]
+    fn test_parse_chain_xrpl() {
+        let chain = parse_chain("xrpl").unwrap();
+        assert_eq!(chain.chain_type, ChainType::Xrpl);
+        assert_eq!(chain.chain_id, "xrpl:mainnet");
+
+        let testnet = parse_chain("xrpl-testnet").unwrap();
+        assert_eq!(testnet.chain_type, ChainType::Xrpl);
+        assert_eq!(testnet.chain_id, "xrpl:testnet");
+
+        let devnet = parse_chain("xrpl-devnet").unwrap();
+        assert_eq!(devnet.chain_type, ChainType::Xrpl);
+        assert_eq!(devnet.chain_id, "xrpl:devnet");
+
+        // CAIP-2 IDs also accepted directly
+        let via_caip2 = parse_chain("xrpl:testnet").unwrap();
+        assert_eq!(via_caip2.chain_type, ChainType::Xrpl);
+        assert_eq!(via_caip2.chain_id, "xrpl:testnet");
     }
 
     #[test]

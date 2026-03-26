@@ -66,7 +66,7 @@ Each network has a canonical chain identifier. Endpoint discovery and transport 
 | Tron | `tron:mainnet` |
 | TON | `ton:mainnet` |
 | Sui | `sui:mainnet` |
-| XRPL | `xrpl:testnet` |
+| XRPL | `xrpl:mainnet` |
 | Spark | `spark:mainnet` |
 | Filecoin | `fil:mainnet` |
 
@@ -90,7 +90,10 @@ cosmos    → cosmos:cosmoshub-4
 tron      → tron:mainnet
 ton       → ton:mainnet
 sui       → sui:mainnet
-xrpl      → xrpl:testnet
+xrpl          → xrpl:mainnet
+xrpl-mainnet  → xrpl:mainnet
+xrpl-testnet  → xrpl:testnet
+xrpl-devnet   → xrpl:devnet
 spark     → spark:mainnet
 filecoin  → fil:mainnet
 ```
