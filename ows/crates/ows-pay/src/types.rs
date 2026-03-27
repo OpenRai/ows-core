@@ -90,16 +90,20 @@ pub struct PaymentRequirements {
     pub pay_to: String,
     #[serde(default = "default_timeout")]
     pub max_timeout_seconds: u64,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "is_json_null")]
     pub extra: serde_json::Value,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub resource: Option<String>,
 }
 
 fn default_timeout() -> u64 {
     30
+}
+
+fn is_json_null(value: &serde_json::Value) -> bool {
+    value.is_null()
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

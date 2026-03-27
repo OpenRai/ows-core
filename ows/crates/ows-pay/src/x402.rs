@@ -236,6 +236,18 @@ fn parse_requirements(
 /// Payment schemes we know how to handle.
 const SUPPORTED_SCHEMES: &[&str] = &["exact"];
 
+fn is_gateway_batched(req: &PaymentRequirements) -> bool {
+    req.extra
+        .get("name")
+        .and_then(|v| v.as_str())
+        .map(|name| name == "GatewayWalletBatched")
+        .unwrap_or(false)
+}
+
+fn parsed_amount(req: &PaymentRequirements) -> Option<u128> {
+    req.amount.parse().ok()
+}
+
 /// Pick the first payment option whose scheme we support and whose
 /// network the wallet supports. Returns the requirement and its
 /// resolved CAIP-2 network string.
@@ -244,9 +256,16 @@ fn pick_payment_option<'a>(
     requirements: &'a [PaymentRequirements],
 ) -> Result<(&'a PaymentRequirements, String), PayError> {
     let supported = wallet.supported_chains();
+    let mut candidates = Vec::new();
 
     for req in requirements {
         if !SUPPORTED_SCHEMES.contains(&req.scheme.as_str()) {
+            continue;
+        }
+
+        // GatewayWalletBatched requires a pre-funded gateway wallet, which
+        // this client does not currently manage.
+        if is_gateway_batched(req) {
             continue;
         }
 
@@ -265,7 +284,28 @@ fn pick_payment_option<'a>(
             Err(_) => req.network.clone(), // Already CAIP-2 (unknown to registry but namespace matched).
         };
 
-        return Ok((req, network));
+        candidates.push((req, network));
+    }
+
+    if let Some((_, first_network)) = candidates.first() {
+        let mut best = &candidates[0];
+        for candidate in candidates.iter().skip(1) {
+            if candidate.1 != *first_network {
+                break;
+            }
+
+            let current = parsed_amount(candidate.0);
+            let best_amount = parsed_amount(best.0);
+            if current
+                .zip(best_amount)
+                .map(|(a, b)| a < b)
+                .unwrap_or(false)
+            {
+                best = candidate;
+            }
+        }
+
+        return Ok((best.0, best.1.clone()));
     }
 
     let networks: Vec<_> = requirements.iter().map(|r| r.network.as_str()).collect();
@@ -777,6 +817,35 @@ mod tests {
     }
 
     #[test]
+    fn pick_prefers_cheapest_option_within_first_supported_network() {
+        let expensive = base_requirement();
+        let mut cheap = base_requirement();
+        cheap.amount = "1000".into();
+        let reqs = [expensive, cheap];
+        let (req, network) = pick_payment_option(&EvmWallet, &reqs).unwrap();
+        assert_eq!(network, "eip155:8453");
+        assert_eq!(req.amount, "1000");
+    }
+
+    #[test]
+    fn pick_skips_gateway_batched_offer() {
+        let mut gateway = base_requirement();
+        gateway.amount = "100".into();
+        gateway.extra = serde_json::json!({
+            "name": "GatewayWalletBatched",
+            "version": "1"
+        });
+
+        let mut regular = base_requirement();
+        regular.amount = "1000".into();
+
+        let reqs = [gateway, regular];
+        let (req, _) = pick_payment_option(&EvmWallet, &reqs).unwrap();
+        assert_eq!(req.amount, "1000");
+        assert_eq!(req.extra["name"], "USD Coin");
+    }
+
+    #[test]
     fn pick_unknown_namespace_errors() {
         let mut req = base_requirement();
         req.network = "foochain:1".into();
@@ -871,6 +940,22 @@ mod tests {
         };
         assert_eq!(v2.x402_version, 2);
         assert!(v2.resource.is_none());
+    }
+
+    #[test]
+    fn build_evm_exact_v2_omits_null_requirement_fields() {
+        let mut req = base_requirement();
+        req.extra = serde_json::Value::Null;
+        req.description = None;
+        req.resource = None;
+
+        let (payload, _) = build_evm_exact(&EvmWallet, &req, "eip155:8453", 2, None).unwrap();
+        let encoded = serde_json::to_value(payload).unwrap();
+        let accepted = &encoded["accepted"];
+
+        assert!(accepted.get("extra").is_none());
+        assert!(accepted.get("description").is_none());
+        assert!(accepted.get("resource").is_none());
     }
 
     #[test]
