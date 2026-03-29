@@ -64,10 +64,7 @@ impl Config {
             "sui:mainnet".into(),
             "https://fullnode.mainnet.sui.io:443".into(),
         );
-        rpc.insert(
-            "xrpl:mainnet".into(),
-            "https://s1.ripple.com:51234".into(),
-        );
+        rpc.insert("xrpl:mainnet".into(), "https://s1.ripple.com:51234".into());
         rpc.insert(
             "xrpl:testnet".into(),
             "https://s.altnet.rippletest.net:51234".into(),

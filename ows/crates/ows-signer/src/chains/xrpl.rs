@@ -143,9 +143,8 @@ impl ChainSigner for XrplSigner {
         let hex_encoded = xrpl_encode(&json_tx)
             .map_err(|e| SignerError::InvalidTransaction(format!("xrpl encode failed: {}", e)))?;
 
-        Ok(hex::decode(&hex_encoded).map_err(|e| {
-            SignerError::InvalidTransaction(format!("invalid hex from encode: {}", e))
-        })?)
+        hex::decode(&hex_encoded)
+            .map_err(|e| SignerError::InvalidTransaction(format!("invalid hex from encode: {}", e)))
     }
 
     /// Off-chain message signing is not yet supported for XRPL.
@@ -371,7 +370,7 @@ mod tests {
         assert!(result.public_key.is_none());
     }
 
-    /// Known vector: encode_signed_transaction injects TxnSignature and SigningPubKey
+    /// Known vector: encode_signed_transaction injects SigningPubKey
     /// into the binary tx and re-encodes to the canonical tx_blob expected by submit.
     ///
     /// tx_bytes and signature match the vector used in test_sign_transaction_matches_known_vector.

@@ -1621,7 +1621,7 @@ dependencies = [
  "sha3",
  "signal-hook",
  "thiserror 2.0.18",
- "xrpl-rust",
+ "xrpl-sdk",
  "zeroize",
 ]
 
@@ -3418,8 +3418,21 @@ dependencies = [
 ]
 
 [[package]]
-name = "xrpl-rust"
-version = "1.0.0"
+name = "xrpl-rust-macros"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c9c5a56d688dd492c201011c19933a9d0e64452d3763bc88624dde91fff37164"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.117",
+]
+
+[[package]]
+name = "xrpl-sdk"
+version = "2.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4de71c6580dd532cf9f26a6bf2ad67e40e1cc24b3308bd4a2623bc1c3c89b815"
 dependencies = [
  "bigdecimal",
  "bs58",
@@ -3451,15 +3464,6 @@ dependencies = [
  "url",
  "xrpl-rust-macros",
  "zeroize",
-]
-
-[[package]]
-name = "xrpl-rust-macros"
-version = "0.1.0"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn 2.0.117",
 ]
 
 [[package]]
