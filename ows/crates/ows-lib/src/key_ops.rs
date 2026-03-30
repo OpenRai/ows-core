@@ -2,7 +2,10 @@ use std::collections::HashMap;
 use std::path::Path;
 
 use ows_core::{ApiKeyFile, EncryptedWallet, OwsError};
-use ows_signer::{decrypt, encrypt_with_hkdf, signer_for_chain, CryptoEnvelope, SecretBytes};
+use ows_signer::{
+    decrypt, encrypt_with_hkdf, signer_for_chain, CryptoEnvelope, HdDeriver, Mnemonic, SecretBytes,
+};
+use ows_signer::eip712;
 
 use crate::error::OwsLibError;
 use crate::key_store;
@@ -198,6 +201,109 @@ pub fn sign_message_with_api_key(
     let key = decrypt_key_from_api_key(&key_file, &wallet, token, chain.chain_type, index)?;
     let signer = signer_for_chain(chain.chain_type);
     let output = signer.sign_message(key.expose(), msg_bytes)?;
+
+    Ok(crate::types::SignResult {
+        signature: hex::encode(&output.signature),
+        recovery_id: output.recovery_id,
+    })
+}
+
+/// Sign EIP-712 typed data using an API token (agent mode).
+///
+/// EVM-only. Parses the typed data JSON before policy evaluation so that
+/// the structured `TypedDataContext` is available to declarative rules and
+/// executable policies.
+pub fn sign_typed_data_with_api_key(
+    token: &str,
+    wallet_name_or_id: &str,
+    chain: &ows_core::Chain,
+    typed_data_json: &str,
+    index: Option<u32>,
+    vault_path: Option<&Path>,
+) -> Result<crate::types::SignResult, OwsLibError> {
+    // 1. EVM-only gate — cheapest check first
+    if chain.chain_type != ows_core::ChainType::Evm {
+        return Err(OwsLibError::InvalidInput(
+            "EIP-712 typed data signing is only supported for EVM chains".into(),
+        ));
+    }
+
+    // 2. Token lookup
+    let token_hash = key_store::hash_token(token);
+    let key_file = key_store::load_api_key_by_token_hash(&token_hash, vault_path)?;
+
+    // 3. Expiry check
+    check_expiry(&key_file)?;
+
+    // 4. Wallet scope check
+    let wallet = vault::load_wallet_by_name_or_id(wallet_name_or_id, vault_path)?;
+    if !key_file.wallet_ids.contains(&wallet.id) {
+        return Err(OwsLibError::InvalidInput(format!(
+            "API key '{}' does not have access to wallet '{}'",
+            key_file.name, wallet.id,
+        )));
+    }
+
+    // 5. Parse typed data early — validates JSON and extracts domain fields
+    let parsed = eip712::parse_typed_data(typed_data_json)?;
+
+    // 6. Build PolicyContext with TypedDataContext
+    let policies = load_policies_for_key(&key_file, vault_path)?;
+    let now = chrono::Utc::now();
+    let date = now.format("%Y-%m-%d").to_string();
+
+    let typed_data_ctx = ows_core::policy::TypedDataContext {
+        verifying_contract: parsed
+            .domain
+            .get("verifyingContract")
+            .and_then(|v| v.as_str())
+            .map(String::from),
+        domain_chain_id: parsed
+            .domain
+            .get("chainId")
+            .and_then(|v| v.as_str().and_then(|s| s.parse::<u64>().ok()).or_else(|| v.as_u64())),
+        primary_type: parsed.primary_type.clone(),
+        domain_name: parsed
+            .domain
+            .get("name")
+            .and_then(|v| v.as_str())
+            .map(String::from),
+        domain_version: parsed
+            .domain
+            .get("version")
+            .and_then(|v| v.as_str())
+            .map(String::from),
+        raw_json: typed_data_json.to_string(),
+    };
+
+    let context = ows_core::PolicyContext {
+        chain_id: chain.chain_id.to_string(),
+        wallet_id: wallet.id.clone(),
+        api_key_id: key_file.id.clone(),
+        transaction: ows_core::policy::TransactionContext {
+            to: None,
+            value: None,
+            raw_hex: hex::encode(typed_data_json.as_bytes()),
+            data: None,
+        },
+        spending: noop_spending_context(&date),
+        timestamp: now.to_rfc3339(),
+        typed_data: Some(typed_data_ctx),
+    };
+
+    // 7. Evaluate policies
+    let result = policy_engine::evaluate_policies(&policies, &context);
+    if !result.allow {
+        return Err(OwsLibError::Core(OwsError::PolicyDenied {
+            policy_id: result.policy_id.unwrap_or_default(),
+            reason: result.reason.unwrap_or_else(|| "denied".into()),
+        }));
+    }
+
+    // 8. Decrypt key and sign
+    let key = decrypt_key_from_api_key(&key_file, &wallet.id, token, chain.chain_type, index)?;
+    let evm_signer = ows_signer::chains::EvmSigner;
+    let output = evm_signer.sign_typed_data(key.expose(), typed_data_json)?;
 
     Ok(crate::types::SignResult {
         signature: hex::encode(&output.signature),
@@ -763,6 +869,201 @@ mod tests {
             OwsLibError::InvalidInput(msg) => {
                 assert!(msg.contains("does not have access"));
             }
+            other => panic!("expected InvalidInput, got: {other}"),
+        }
+    }
+
+    fn test_typed_data_json() -> String {
+        serde_json::json!({
+            "types": {
+                "EIP712Domain": [
+                    {"name": "name", "type": "string"},
+                    {"name": "chainId", "type": "uint256"},
+                    {"name": "verifyingContract", "type": "address"}
+                ],
+                "PermitSingle": [
+                    {"name": "spender", "type": "address"},
+                    {"name": "value", "type": "uint256"}
+                ]
+            },
+            "primaryType": "PermitSingle",
+            "domain": {
+                "name": "Permit2",
+                "chainId": "8453",
+                "verifyingContract": "0x000000000022D473030F116dDEE9F6B43aC78BA3"
+            },
+            "message": {
+                "spender": "0x742d35Cc6634C0532925a3b844Bc9e7595f2bD0C",
+                "value": "1000000"
+            }
+        })
+        .to_string()
+    }
+
+    fn setup_typed_data_policy(vault: &Path) -> String {
+        let policy = ows_core::Policy {
+            id: "td-policy".to_string(),
+            name: "Typed Data Policy".to_string(),
+            version: 1,
+            created_at: "2026-03-22T10:00:00Z".to_string(),
+            rules: vec![
+                PolicyRule::AllowedChains {
+                    chain_ids: vec!["eip155:8453".to_string()],
+                },
+                PolicyRule::AllowedTypedDataContracts {
+                    contracts: vec![
+                        "0x000000000022D473030F116dDEE9F6B43aC78BA3".to_string(),
+                    ],
+                },
+            ],
+            executable: None,
+            config: None,
+            action: PolicyAction::Deny,
+        };
+        policy_store::save_policy(&policy, Some(vault)).unwrap();
+        policy.id
+    }
+
+    #[test]
+    fn sign_typed_data_with_api_key_happy_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let vault = dir.path().to_path_buf();
+        let passphrase = "test-pass";
+        let wallet_id = setup_test_wallet(&vault, passphrase);
+        let policy_id = setup_typed_data_policy(&vault);
+        let (token, _) = create_api_key(
+            "td-agent", &[wallet_id], &[policy_id], passphrase, None, Some(&vault),
+        ).unwrap();
+        let chain = ows_core::parse_chain("base").unwrap();
+        let result = sign_typed_data_with_api_key(
+            &token, "test-wallet", &chain, &test_typed_data_json(), None, Some(&vault),
+        );
+        assert!(result.is_ok(), "sign_typed_data_with_api_key failed: {:?}", result.err());
+        let sign_result = result.unwrap();
+        assert!(!sign_result.signature.is_empty());
+        let v = sign_result.recovery_id.unwrap();
+        assert!(v == 27 || v == 28, "unexpected v value: {v}");
+    }
+
+    #[test]
+    fn sign_typed_data_with_api_key_non_evm_rejected() {
+        let dir = tempfile::tempdir().unwrap();
+        let vault = dir.path().to_path_buf();
+        let passphrase = "test-pass";
+        let wallet_id = setup_test_wallet(&vault, passphrase);
+        let policy_id = setup_test_policy(&vault);
+        let (token, _) = create_api_key(
+            "agent", &[wallet_id], &[policy_id], passphrase, None, Some(&vault),
+        ).unwrap();
+        let chain = ows_core::parse_chain("solana").unwrap();
+        let result = sign_typed_data_with_api_key(
+            &token, "test-wallet", &chain, &test_typed_data_json(), None, Some(&vault),
+        );
+        assert!(result.is_err());
+        let err_msg = format!("{}", result.unwrap_err());
+        assert!(err_msg.contains("EVM"));
+    }
+
+    #[test]
+    fn sign_typed_data_with_api_key_wrong_contract_denied() {
+        let dir = tempfile::tempdir().unwrap();
+        let vault = dir.path().to_path_buf();
+        let passphrase = "test-pass";
+        let wallet_id = setup_test_wallet(&vault, passphrase);
+        let policy_id = setup_typed_data_policy(&vault);
+        let (token, _) = create_api_key(
+            "agent", &[wallet_id], &[policy_id], passphrase, None, Some(&vault),
+        ).unwrap();
+        let wrong_contract_td = serde_json::json!({
+            "types": {
+                "EIP712Domain": [
+                    {"name": "name", "type": "string"},
+                    {"name": "verifyingContract", "type": "address"}
+                ],
+                "Order": [{"name": "maker", "type": "address"}]
+            },
+            "primaryType": "Order",
+            "domain": {
+                "name": "Seaport",
+                "verifyingContract": "0x00000000000000ADc04C56Bf30aC9d3c0aAF14dC"
+            },
+            "message": {"maker": "0x742d35Cc6634C0532925a3b844Bc9e7595f2bD0C"}
+        }).to_string();
+        let chain = ows_core::parse_chain("base").unwrap();
+        let result = sign_typed_data_with_api_key(
+            &token, "test-wallet", &chain, &wrong_contract_td, None, Some(&vault),
+        );
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            OwsLibError::Core(OwsError::PolicyDenied { reason, .. }) => {
+                assert!(reason.contains("not in allowed list"));
+            }
+            other => panic!("expected PolicyDenied, got: {other}"),
+        }
+    }
+
+    #[test]
+    fn sign_typed_data_with_api_key_malformed_json_rejected() {
+        let dir = tempfile::tempdir().unwrap();
+        let vault = dir.path().to_path_buf();
+        let passphrase = "test-pass";
+        let wallet_id = setup_test_wallet(&vault, passphrase);
+        let policy_id = setup_test_policy(&vault);
+        let (token, _) = create_api_key(
+            "agent", &[wallet_id], &[policy_id], passphrase, None, Some(&vault),
+        ).unwrap();
+        let chain = ows_core::parse_chain("base").unwrap();
+        let result = sign_typed_data_with_api_key(
+            &token, "test-wallet", &chain, "not valid json", None, Some(&vault),
+        );
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn sign_typed_data_with_api_key_expired_key_rejected() {
+        let dir = tempfile::tempdir().unwrap();
+        let vault = dir.path().to_path_buf();
+        let passphrase = "test-pass";
+        let wallet_id = setup_test_wallet(&vault, passphrase);
+        let policy_id = setup_test_policy(&vault);
+        let (token, _) = create_api_key(
+            "agent", &[wallet_id], &[policy_id], passphrase, Some("2020-01-01T00:00:00Z"), Some(&vault),
+        ).unwrap();
+        let chain = ows_core::parse_chain("base").unwrap();
+        let result = sign_typed_data_with_api_key(
+            &token, "test-wallet", &chain, &test_typed_data_json(), None, Some(&vault),
+        );
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            OwsLibError::Core(OwsError::ApiKeyExpired { .. }) => {}
+            other => panic!("expected ApiKeyExpired, got: {other}"),
+        }
+    }
+
+    #[test]
+    fn sign_typed_data_with_api_key_wallet_not_in_scope() {
+        let dir = tempfile::tempdir().unwrap();
+        let vault = dir.path().to_path_buf();
+        let passphrase = "test-pass";
+        let wallet_id = setup_test_wallet(&vault, passphrase);
+        let policy_id = setup_test_policy(&vault);
+        let mnemonic2 = "zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo wrong";
+        let envelope2 = encrypt(mnemonic2.as_bytes(), passphrase).unwrap();
+        let crypto2 = serde_json::to_value(&envelope2).unwrap();
+        let wallet2 = EncryptedWallet::new(
+            "wallet-2-id".to_string(), "other-wallet".to_string(), vec![], crypto2, KeyType::Mnemonic,
+        );
+        vault::save_encrypted_wallet(&wallet2, Some(&vault)).unwrap();
+        let (token, _) = create_api_key(
+            "agent", &[wallet_id], &[policy_id], passphrase, None, Some(&vault),
+        ).unwrap();
+        let chain = ows_core::parse_chain("base").unwrap();
+        let result = sign_typed_data_with_api_key(
+            &token, "other-wallet", &chain, &test_typed_data_json(), None, Some(&vault),
+        );
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            OwsLibError::InvalidInput(msg) => { assert!(msg.contains("does not have access")); }
             other => panic!("expected InvalidInput, got: {other}"),
         }
     }
