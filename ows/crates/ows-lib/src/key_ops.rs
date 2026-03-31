@@ -4,7 +4,7 @@ use std::path::Path;
 use ows_core::{ApiKeyFile, EncryptedWallet, OwsError};
 use ows_signer::eip712;
 use ows_signer::{
-    decrypt, encrypt_with_hkdf, signer_for_chain, CryptoEnvelope, HdDeriver, Mnemonic, SecretBytes,
+    decrypt, encrypt_with_hkdf, signer_for_chain, CryptoEnvelope, SecretBytes,
 };
 
 use crate::error::OwsLibError;
@@ -322,7 +322,7 @@ pub fn sign_typed_data_with_api_key(
     }
 
     // 8. Decrypt key and sign
-    let key = decrypt_key_from_api_key(&key_file, &wallet.id, token, chain.chain_type, index)?;
+    let key = decrypt_key_from_api_key(&key_file, &wallet, token, chain.chain_type, index)?;
     let evm_signer = ows_signer::chains::EvmSigner;
     let output = evm_signer.sign_typed_data(key.expose(), typed_data_json)?;
 
