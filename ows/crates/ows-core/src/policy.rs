@@ -53,7 +53,7 @@ pub struct PolicyContext {
     pub typed_data: Option<TypedDataContext>,
 }
 
-/// Transaction fields available for policy evaluation.
+/// Signing-request fields available for policy evaluation.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TransactionContext {
     /// Destination address (if applicable).
@@ -62,7 +62,8 @@ pub struct TransactionContext {
     /// Native value in smallest unit (wei, lamports, etc).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub value: Option<String>,
-    /// Raw transaction hex.
+    /// Raw transaction hex. Empty for non-transaction signing requests such as
+    /// typed data, which is instead exposed via [`TypedDataContext::raw_json`].
     pub raw_hex: String,
     /// Calldata / input data (EVM).
     #[serde(skip_serializing_if = "Option::is_none")]

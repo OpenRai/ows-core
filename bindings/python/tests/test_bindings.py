@@ -206,3 +206,77 @@ def test_sign_typed_data_with_api_key(vault_dir):
     ows.revoke_api_key(key["id"], vault_path_opt=vault_dir)
     ows.delete_policy("td-base-only", vault_path_opt=vault_dir)
     ows.delete_wallet(wallet["id"], vault_path_opt=vault_dir)
+
+
+def test_sign_typed_data_respects_allowed_typed_data_contracts(vault_dir):
+    wallet = ows.create_wallet("td-contract-test", vault_path_opt=vault_dir)
+
+    ows.create_policy(json.dumps({
+        "id": "td-contract-only",
+        "name": "Typed Data Contract Only",
+        "version": 1,
+        "created_at": "2026-03-22T00:00:00Z",
+        "rules": [
+            {"type": "allowed_chains", "chain_ids": ["eip155:8453"]},
+            {
+                "type": "allowed_typed_data_contracts",
+                "contracts": ["0xCcCCccccCCCCcCCCCCCcCcCccCcCCCcCcccccccC"],
+            },
+        ],
+        "action": "deny",
+    }), vault_path_opt=vault_dir)
+
+    key = ows.create_api_key(
+        "td-contract-agent",
+        [wallet["id"]],
+        ["td-contract-only"],
+        "",
+        vault_path_opt=vault_dir,
+    )
+
+    typed_data = {
+        "types": {
+            "EIP712Domain": [
+                {"name": "name", "type": "string"},
+                {"name": "version", "type": "string"},
+                {"name": "chainId", "type": "uint256"},
+                {"name": "verifyingContract", "type": "address"},
+            ],
+            "Mail": [{"name": "contents", "type": "string"}],
+        },
+        "primaryType": "Mail",
+        "domain": {
+            "name": "Ether Mail",
+            "version": "1",
+            "chainId": 8453,
+            "verifyingContract": "0xCcCCccccCCCCcCCCCCCcCcCccCcCCCcCcccccccC",
+        },
+        "message": {
+            "contents": "Hello, Bob!",
+        },
+    }
+
+    allowed = ows.sign_typed_data(
+        wallet["id"],
+        "base",
+        json.dumps(typed_data),
+        passphrase=key["token"],
+        vault_path_opt=vault_dir,
+    )
+    assert len(allowed["signature"]) > 0
+
+    denied_typed_data = copy.deepcopy(typed_data)
+    denied_typed_data["domain"]["verifyingContract"] = "0x00000000000000ADc04C56Bf30aC9d3c0aAF14dC"
+
+    with pytest.raises(Exception, match="not in allowed list"):
+        ows.sign_typed_data(
+            wallet["id"],
+            "base",
+            json.dumps(denied_typed_data),
+            passphrase=key["token"],
+            vault_path_opt=vault_dir,
+        )
+
+    ows.revoke_api_key(key["id"], vault_path_opt=vault_dir)
+    ows.delete_policy("td-contract-only", vault_path_opt=vault_dir)
+    ows.delete_wallet(wallet["id"], vault_path_opt=vault_dir)

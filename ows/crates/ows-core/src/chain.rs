@@ -1,3 +1,4 @@
+use crate::caip::ChainId;
 use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::str::FromStr;
@@ -34,6 +35,38 @@ pub struct Chain {
     pub name: &'static str,
     pub chain_type: ChainType,
     pub chain_id: &'static str,
+}
+
+impl Chain {
+    /// Return the EIP-155 reference portion of this chain's CAIP-2 ID.
+    pub fn evm_chain_reference(&self) -> Result<&str, String> {
+        if self.chain_type != ChainType::Evm {
+            return Err(format!("chain '{}' is not an EVM chain", self.chain_id));
+        }
+
+        let chain_id = self
+            .chain_id
+            .parse::<ChainId>()
+            .map_err(|e| e.to_string())?;
+        if chain_id.namespace != "eip155" {
+            return Err(format!(
+                "EVM chain '{}' is missing an eip155 reference",
+                self.chain_id
+            ));
+        }
+
+        self.chain_id
+            .split_once(':')
+            .map(|(_, reference)| reference)
+            .ok_or_else(|| format!("invalid CAIP-2 chain ID: '{}'", self.chain_id))
+    }
+
+    /// Return the numeric EIP-155 chain ID for an EVM chain.
+    pub fn evm_chain_id_u64(&self) -> Result<u64, String> {
+        self.evm_chain_reference()?
+            .parse()
+            .map_err(|_| format!("cannot extract numeric chain ID from: {}", self.chain_id))
+    }
 }
 
 /// Known chains registry.
@@ -392,6 +425,27 @@ mod tests {
         assert_eq!(chain.name, "eip155:9746");
         assert_eq!(chain.chain_type, ChainType::Evm);
         assert_eq!(chain.chain_id, "eip155:9746");
+    }
+
+    #[test]
+    fn test_evm_chain_reference_for_known_chain() {
+        let chain = parse_chain("base").unwrap();
+        assert_eq!(chain.evm_chain_reference().unwrap(), "8453");
+        assert_eq!(chain.evm_chain_id_u64().unwrap(), 8453);
+    }
+
+    #[test]
+    fn test_evm_chain_reference_for_unknown_caip2_chain() {
+        let chain = parse_chain("eip155:999999").unwrap();
+        assert_eq!(chain.evm_chain_reference().unwrap(), "999999");
+        assert_eq!(chain.evm_chain_id_u64().unwrap(), 999999);
+    }
+
+    #[test]
+    fn test_evm_chain_reference_rejects_non_evm_chain() {
+        let chain = parse_chain("solana").unwrap();
+        let err = chain.evm_chain_reference().unwrap_err();
+        assert!(err.contains("not an EVM chain"));
     }
 
     #[test]

@@ -250,11 +250,9 @@ pub fn sign_typed_data_with_api_key(
     // Prevents bypassing AllowedChains by submitting typed data with a different chainId
     if let Some(domain_chain_id) = parsed.domain.get("chainId").and_then(parse_domain_chain_id) {
         let expected_chain_id = chain
-            .chain_id
-            .split(':')
-            .nth(1)
-            .and_then(|s| s.parse::<u64>().ok());
-        if expected_chain_id != Some(domain_chain_id) {
+            .evm_chain_id_u64()
+            .map_err(OwsLibError::InvalidInput)?;
+        if expected_chain_id != domain_chain_id {
             return Err(OwsLibError::InvalidInput(format!(
                 "EIP-712 domain chainId ({}) does not match requested chain ({})",
                 domain_chain_id, chain.chain_id,
@@ -295,7 +293,7 @@ pub fn sign_typed_data_with_api_key(
         transaction: ows_core::policy::TransactionContext {
             to: None,
             value: None,
-            raw_hex: hex::encode(typed_data_json.as_bytes()),
+            raw_hex: String::new(),
             data: None,
         },
         spending: noop_spending_context(&date),
@@ -1217,6 +1215,78 @@ mod tests {
         assert!(
             err_msg.contains("domain chainId"),
             "expected chain mismatch error, got: {err_msg}"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn sign_typed_data_with_api_key_executable_policy_receives_raw_json_not_raw_hex() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::tempdir().unwrap();
+        let vault = dir.path().to_path_buf();
+        let passphrase = "test-pass";
+        let wallet_id = setup_test_wallet(&vault, passphrase);
+        let typed_data_json = test_typed_data_json();
+
+        let script = vault.join("check-typed-data.py");
+        std::fs::write(
+            &script,
+            format!(
+                r#"#!/usr/bin/env python3
+import json
+import sys
+
+payload = json.load(sys.stdin)
+typed_data = payload.get("typed_data") or {{}}
+transaction = payload.get("transaction") or {{}}
+
+if typed_data.get("raw_json") == {typed_data_json:?} and transaction.get("raw_hex") == "":
+    print('{{"allow": true}}')
+else:
+    print(json.dumps({{"allow": False, "reason": f"raw_hex={{transaction.get('raw_hex')}} raw_json={{typed_data.get('raw_json')}}"}}))
+"#
+            ),
+        )
+        .unwrap();
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+        let policy = ows_core::Policy {
+            id: "typed-data-exe".to_string(),
+            name: "typed data executable".to_string(),
+            version: 1,
+            created_at: "2026-03-22T10:00:00Z".to_string(),
+            rules: vec![],
+            executable: Some(script.display().to_string()),
+            config: None,
+            action: ows_core::PolicyAction::Deny,
+        };
+        policy_store::save_policy(&policy, Some(&vault)).unwrap();
+
+        let (token, _) = create_api_key(
+            "td-exe-agent",
+            &[wallet_id],
+            &["typed-data-exe".to_string()],
+            passphrase,
+            None,
+            Some(&vault),
+        )
+        .unwrap();
+
+        let chain = ows_core::parse_chain("base").unwrap();
+        let result = sign_typed_data_with_api_key(
+            &token,
+            "test-wallet",
+            &chain,
+            &typed_data_json,
+            None,
+            Some(&vault),
+        );
+
+        assert!(
+            result.is_ok(),
+            "typed-data executable policy rejected context: {:?}",
+            result.err()
         );
     }
 }

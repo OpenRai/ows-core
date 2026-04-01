@@ -424,6 +424,76 @@ describe('@open-wallet-standard/core', () => {
     deleteWallet(wallet.id, vaultDir);
   });
 
+  it('enforces AllowedTypedDataContracts through the node binding', () => {
+    const wallet = createWallet('typed-data-contract-api', undefined, 12, vaultDir);
+
+    createPolicy(JSON.stringify({
+      id: 'td-contract-only',
+      name: 'Typed Data Contract Only',
+      version: 1,
+      created_at: '2026-03-22T00:00:00Z',
+      rules: [
+        { type: 'allowed_chains', chain_ids: ['eip155:8453'] },
+        {
+          type: 'allowed_typed_data_contracts',
+          contracts: ['0xCcCCccccCCCCcCCCCCCcCcCccCcCCCcCcccccccC'],
+        },
+      ],
+      action: 'deny',
+    }), vaultDir);
+
+    const key = createApiKey('td-contract-agent', [wallet.id], ['td-contract-only'], '', null, vaultDir);
+
+    const typedData = {
+      types: {
+        EIP712Domain: [
+          { name: 'name', type: 'string' },
+          { name: 'version', type: 'string' },
+          { name: 'chainId', type: 'uint256' },
+          { name: 'verifyingContract', type: 'address' },
+        ],
+        Mail: [{ name: 'contents', type: 'string' }],
+      },
+      primaryType: 'Mail',
+      domain: {
+        name: 'Ether Mail',
+        version: '1',
+        chainId: 8453,
+        verifyingContract: '0xCcCCccccCCCCcCCCCCCcCcCccCcCCCcCcccccccC',
+      },
+      message: {
+        contents: 'Hello, Bob!',
+      },
+    };
+
+    const allowed = signTypedData(
+      wallet.id,
+      'base',
+      JSON.stringify(typedData),
+      key.token,
+      null,
+      vaultDir,
+    );
+    assert.ok(allowed.signature.length > 0);
+
+    const deniedTypedData = {
+      ...typedData,
+      domain: {
+        ...typedData.domain,
+        verifyingContract: '0x00000000000000ADc04C56Bf30aC9d3c0aAF14dC',
+      },
+    };
+
+    assert.throws(
+      () => signTypedData(wallet.id, 'base', JSON.stringify(deniedTypedData), key.token, null, vaultDir),
+      (err) => err.message.includes('not in allowed list'),
+    );
+
+    revokeApiKey(key.id, vaultDir);
+    deletePolicy('td-contract-only', vaultDir);
+    deleteWallet(wallet.id, vaultDir);
+  });
+
   it('executable policy gates signing', () => {
     const wallet = createWallet('exe-test', undefined, 12, vaultDir);
 
