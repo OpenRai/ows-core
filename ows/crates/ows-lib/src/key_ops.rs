@@ -2,9 +2,8 @@ use std::collections::HashMap;
 use std::path::Path;
 
 use ows_core::{ApiKeyFile, EncryptedWallet, OwsError};
-use ows_signer::eip712;
 use ows_signer::{
-    decrypt, encrypt_with_hkdf, signer_for_chain, CryptoEnvelope, SecretBytes,
+    decrypt, eip712, encrypt_with_hkdf, signer_for_chain, CryptoEnvelope, SecretBytes,
 };
 
 use crate::error::OwsLibError;
