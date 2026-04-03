@@ -147,7 +147,7 @@ Reference implementation documentation:
 - [CLI Reference](docs/sdk-cli.md)
 - [Node.js SDK](docs/sdk-node.md)
 - [Python SDK](docs/sdk-python.md)
-- [Policy Engine Implementation Guide](docs/policy-engine-implementation.md)
+- [Policy Engine Implementation Guide](docs/03-policy-engine.md)
 
 ## License
 
