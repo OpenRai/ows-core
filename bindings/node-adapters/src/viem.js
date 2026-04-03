@@ -14,7 +14,10 @@ function owsToViemAccount(walletNameOrId, options = {}) {
   return toAccount({
     address,
     async signMessage({ message }) {
-      const msg = typeof message === "string" ? message : Buffer.from(message.raw ?? message).toString("hex");
+      const raw = message.raw ?? message;
+      const msg = typeof message === "string" ? message
+        : typeof raw === "string" ? (raw.startsWith("0x") ? raw.slice(2) : Buffer.from(raw).toString("hex"))
+        : Buffer.from(raw).toString("hex");
       const result = signMessage(walletNameOrId, chain, msg, options.passphrase, typeof message === "string" ? undefined : "hex", options.index, options.vaultPath);
       return result.signature.startsWith("0x") ? result.signature : `0x${result.signature}`;
     },
