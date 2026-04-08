@@ -73,6 +73,7 @@ impl Config {
             "xrpl:devnet".into(),
             "https://s.devnet.rippletest.net:51234".into(),
         );
+        rpc.insert("nano:mainnet".into(), "https://rpc.nano.to".into());
         rpc
     }
 }
@@ -253,7 +254,7 @@ mod tests {
     fn test_load_or_default_nonexistent() {
         let config = Config::load_or_default_from(std::path::Path::new("/nonexistent/config.json"));
         // Should have all default RPCs
-        assert_eq!(config.rpc.len(), 18);
+        assert_eq!(config.rpc.len(), 19);
         assert_eq!(config.rpc_url("eip155:1"), Some("https://eth.llamarpc.com"));
     }
 
