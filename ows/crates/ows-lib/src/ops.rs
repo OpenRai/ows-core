@@ -1019,9 +1019,9 @@ fn broadcast_nano(rpc_url: &str, signed_bytes: &[u8]) -> Result<String, OwsLibEr
         }
     };
 
-    let difficulty = match subtype {
-        "send" => crate::nano_rpc::SEND_DIFFICULTY,
-        _ => crate::nano_rpc::RECEIVE_DIFFICULTY,
+    let threshold = match subtype {
+        "send" => crate::nano_rpc::EPOCH2_SEND,
+        _ => crate::nano_rpc::EPOCH2_RECEIVE,
     };
 
     // PoW root: for open blocks, use account pubkey; otherwise use previous hash
@@ -1031,7 +1031,7 @@ fn broadcast_nano(rpc_url: &str, signed_bytes: &[u8]) -> Result<String, OwsLibEr
         hex::encode(previous)
     };
 
-    let work = crate::nano_rpc::work_generate(rpc_url, &work_root, difficulty)?;
+    let work = crate::nano_rpc::work_generate(rpc_url, &work_root, threshold)?;
 
     let block_json = serde_json::json!({
         "type": "state",

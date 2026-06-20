@@ -3,7 +3,7 @@
 //! Uses `curl` for HTTP, consistent with the rest of ows-lib (no added HTTP deps).
 //!
 //! PoW is local-first by default (via `nano-rspow`), falling back to remote RPC.
-//! Control via `NANO_POW_MODE` env: `"auto"` (default), `"local"`, `"remote"`.
+//! Control via `NANO_WORK_MODE` env: `"auto"` (default), `"local"`, `"remote"`.
 
 use crate::error::OwsLibError;
 use std::process::Command;
@@ -108,12 +108,12 @@ pub fn account_info(rpc_url: &str, account: &str) -> Result<Option<NanoAccountIn
 fn work_generate_single(
     rpc_url: &str,
     hash: &str,
-    difficulty: &str,
+    difficulty_hex: &str,
 ) -> Result<String, OwsLibError> {
     let body = serde_json::json!({
         "action": "work_generate",
         "hash": hash,
-        "difficulty": difficulty
+        "difficulty": difficulty_hex
     });
 
     let resp = nano_rpc_call(rpc_url, &body)?;
@@ -124,7 +124,7 @@ fn work_generate_single(
         .ok_or_else(|| OwsLibError::BroadcastFailed("no work in work_generate response".into()))
 }
 
-/// PoW mode controlled by `NANO_POW_MODE` env var.
+/// PoW mode controlled by `NANO_WORK_MODE` env var.
 enum PowMode {
     /// Local only — fail if local PoW can't produce a result.
     Local,
@@ -135,26 +135,11 @@ enum PowMode {
 }
 
 fn pow_mode() -> PowMode {
-    match std::env::var("NANO_POW_MODE").as_deref() {
+    match std::env::var("NANO_WORK_MODE").as_deref() {
         Ok("local") => PowMode::Local,
         Ok("remote") => PowMode::Remote,
         _ => PowMode::Auto,
     }
-}
-
-/// Convert a hex-encoded difficulty string (e.g. `"fffffff800000000"`) to `u64`.
-fn difficulty_hex_to_u64(hex_str: &str) -> Result<u64, OwsLibError> {
-    let bytes = hex::decode(hex_str).map_err(|e| {
-        OwsLibError::BroadcastFailed(format!("invalid difficulty hex string: {e}"))
-    })?;
-    if bytes.len() != 8 {
-        return Err(OwsLibError::BroadcastFailed(format!(
-            "difficulty hex must be 8 bytes, got {}",
-            bytes.len()
-        )));
-    }
-    let arr: [u8; 8] = bytes.try_into().unwrap();
-    Ok(u64::from_be_bytes(arr))
 }
 
 /// Try local PoW via `nano-rspow`.
@@ -188,7 +173,7 @@ fn work_generate_local(_hash_hex: &str, _threshold: u64) -> Result<String, OwsLi
 
 /// Request proof-of-work with local-first, remote-fallback strategy.
 ///
-/// Controlled by `NANO_POW_MODE` env var:
+/// Controlled by `NANO_WORK_MODE` env var:
 /// - `"auto"` (default): local first, remote fallback on failure
 /// - `"local"`: local PoW only, fail if it can't produce a result
 /// - `"remote"`: remote RPC only, skip local
@@ -196,12 +181,10 @@ fn work_generate_local(_hash_hex: &str, _threshold: u64) -> Result<String, OwsLi
 /// Remote endpoints are tried in order:
 /// 1. The primary `rpc_url`
 /// 2. URLs from `NANO_WORK_URL` env var (semicolon-separated)
-pub fn work_generate(rpc_url: &str, hash: &str, difficulty: &str) -> Result<String, OwsLibError> {
-    let threshold = difficulty_hex_to_u64(difficulty)?;
-
+pub fn work_generate(rpc_url: &str, hash: &str, threshold: u64) -> Result<String, OwsLibError> {
     match pow_mode() {
         PowMode::Remote => {
-            return work_generate_remote(rpc_url, hash, difficulty);
+            return work_generate_remote(rpc_url, hash, threshold);
         }
         PowMode::Local => {
             return work_generate_local(hash, threshold);
@@ -215,15 +198,17 @@ pub fn work_generate(rpc_url: &str, hash: &str, difficulty: &str) -> Result<Stri
     }
 
     eprintln!("  Local PoW failed, falling back to remote");
-    work_generate_remote(rpc_url, hash, difficulty)
+    work_generate_remote(rpc_url, hash, threshold)
 }
 
 /// Remote PoW fallback — tries the primary RPC then `NANO_WORK_URL` endpoints.
 fn work_generate_remote(
     rpc_url: &str,
     hash: &str,
-    difficulty: &str,
+    threshold: u64,
 ) -> Result<String, OwsLibError> {
+    let difficulty_hex = format!("{:016x}", threshold);
+
     let mut endpoints: Vec<String> = vec![rpc_url.to_string()];
 
     if let Ok(urls) = std::env::var("NANO_WORK_URL") {
@@ -238,7 +223,7 @@ fn work_generate_remote(
     let mut last_error = None;
 
     for endpoint in &endpoints {
-        match work_generate_single(endpoint, hash, difficulty) {
+        match work_generate_single(endpoint, hash, &difficulty_hex) {
             Ok(work) => return Ok(work),
             Err(e) => {
                 eprintln!("  PoW failed on {endpoint}: {e}");
@@ -274,6 +259,20 @@ pub fn process_block(
         .ok_or_else(|| OwsLibError::BroadcastFailed(format!("no hash in process response: {resp}")))
 }
 
-/// PoW difficulty thresholds (as hex strings for work_generate RPC).
-pub const SEND_DIFFICULTY: &str = "fffffff800000000";
-pub const RECEIVE_DIFFICULTY: &str = "fffffe0000000000";
+/// Epoch 2 send/change threshold.
+///
+/// When the `local-pow` feature is enabled, sourced directly from
+/// `nano_rspow::thresholds` to avoid any duplication. When disabled,
+/// falls back to the same hard-coded value.
+#[cfg(feature = "local-pow")]
+pub use nano_rspow::thresholds::EPOCH2_SEND;
+
+#[cfg(not(feature = "local-pow"))]
+pub const EPOCH2_SEND: u64 = 0xffff_fff8_0000_0000;
+
+/// Epoch 2 receive threshold.
+#[cfg(feature = "local-pow")]
+pub use nano_rspow::thresholds::EPOCH2_RECEIVE;
+
+#[cfg(not(feature = "local-pow"))]
+pub const EPOCH2_RECEIVE: u64 = 0xffff_fe00_0000_0000;
