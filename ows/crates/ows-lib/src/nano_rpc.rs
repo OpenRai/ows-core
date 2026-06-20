@@ -276,3 +276,43 @@ pub use nano_rspow::thresholds::EPOCH2_RECEIVE;
 
 #[cfg(not(feature = "local-pow"))]
 pub const EPOCH2_RECEIVE: u64 = 0xffff_fe00_0000_0000;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn epoch2_send_hex_matches_expected() {
+        let hex = format!("{:016x}", EPOCH2_SEND);
+        assert_eq!(hex, "fffffff800000000");
+    }
+
+    #[test]
+    fn epoch2_receive_hex_matches_expected() {
+        let hex = format!("{:016x}", EPOCH2_RECEIVE);
+        assert_eq!(hex, "fffffe0000000000");
+    }
+
+    #[test]
+    fn threshold_hex_roundtrip() {
+        for threshold in [EPOCH2_SEND, EPOCH2_RECEIVE] {
+            let hex = format!("{:016x}", threshold);
+            let decoded = u64::from_str_radix(&hex, 16).unwrap();
+            assert_eq!(decoded, threshold);
+        }
+    }
+
+    #[cfg(feature = "local-pow")]
+    #[test]
+    fn local_pow_known_test_vector() {
+        let hash_bytes = hex::decode(
+            "718CC2121C3E641059BC1C2CFC45666C99E8AE922F7A807B7D07B62C995D79E2",
+        )
+        .unwrap();
+        let hash: [u8; 32] = hash_bytes.try_into().unwrap();
+        let result = nano_rspow::work_generate(&hash, nano_rspow::thresholds::EPOCH1);
+        assert!(result.is_some(), "local PoW should produce a result");
+        let result = result.unwrap();
+        assert!(result.is_valid(), "result should meet the threshold");
+    }
+}
