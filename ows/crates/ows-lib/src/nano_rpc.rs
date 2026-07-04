@@ -3,34 +3,10 @@
 //! Uses `curl` for HTTP, consistent with the rest of ows-lib (no added HTTP deps).
 //!
 //! PoW is local-first when recommended (via `nano-rspow`), falling back to remote RPC.
-//! Control via `NANO_WORK_MODE` env: `"auto"` (default), `"local"`, `"remote"`.
+//! Control via `NANO_WORK_MODE` env: `"auto"` (default), `"local"`, `"remote"`, `"retune"`.
 
 use crate::error::OwsLibError;
 use std::process::Command;
-
-/// Runtime diagnostics for the local Nano PoW backend.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct LocalPowDiagnostics {
-    pub backend: String,
-    pub recommended: bool,
-    pub gpu: Option<LocalPowGpuDiagnostics>,
-    pub gpu_error: Option<String>,
-}
-
-/// GPU details reported by `nano-rspow`, if a GPU backend is active.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct LocalPowGpuDiagnostics {
-    pub backend_api: String,
-    pub adapter_name: String,
-    pub driver_info: String,
-    pub vendor_id: u32,
-    pub device_id: u32,
-    pub max_compute_workgroups_per_dimension: u32,
-    pub dispatch_x: u32,
-    pub nonces_per_dispatch: u64,
-    pub tuning_source: String,
-    pub cache_path: Option<String>,
-}
 
 /// Call a Nano RPC action via curl and return the parsed JSON response.
 fn nano_rpc_call(
@@ -157,6 +133,15 @@ enum PowMode {
     Remote,
     /// Local first, remote fallback on failure.
     Auto,
+    /// Clear local tuning cache, then behave like auto.
+    Retune,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LocalPowRecommendation {
+    Skip,
+    CheckCachedRecommendation,
+    ClearCacheAndCheckRecommendation,
 }
 
 fn pow_mode() -> PowMode {
@@ -167,7 +152,16 @@ fn pow_mode_from_env(value: Option<&str>) -> PowMode {
     match value {
         Some("local") => PowMode::Local,
         Some("remote") => PowMode::Remote,
+        Some("retune") => PowMode::Retune,
         _ => PowMode::Auto,
+    }
+}
+
+fn local_pow_recommendation_for_mode(mode: PowMode) -> LocalPowRecommendation {
+    match mode {
+        PowMode::Auto => LocalPowRecommendation::CheckCachedRecommendation,
+        PowMode::Retune => LocalPowRecommendation::ClearCacheAndCheckRecommendation,
+        PowMode::Local | PowMode::Remote => LocalPowRecommendation::Skip,
     }
 }
 
@@ -206,68 +200,33 @@ fn work_generate_local(_hash_hex: &str, _threshold: u64) -> Result<String, OwsLi
 /// use its persistent tuning cache. Without local PoW support, it always returns
 /// `false`.
 #[cfg(feature = "local-pow")]
-pub fn local_pow_recommended() -> bool {
+fn local_pow_recommended() -> bool {
     nano_rspow::recommend_local_pow()
 }
 
 #[cfg(not(feature = "local-pow"))]
-pub fn local_pow_recommended() -> bool {
+fn local_pow_recommended() -> bool {
     false
 }
 
-/// Clears `nano-rspow`'s persistent PoW tuning cache.
-///
-/// Returns true when a cache directory existed and was removed.
 #[cfg(feature = "local-pow")]
-pub fn clear_pow_tuning_cache() -> bool {
+fn clear_pow_tuning_cache() -> bool {
     nano_rspow::clear_pow_tuning_cache()
 }
 
 #[cfg(not(feature = "local-pow"))]
-pub fn clear_pow_tuning_cache() -> bool {
+fn clear_pow_tuning_cache() -> bool {
     false
 }
 
-/// Collect local Nano PoW diagnostics.
-#[cfg(feature = "local-pow")]
-pub fn local_pow_diagnostics(retune: bool) -> LocalPowDiagnostics {
-    if retune {
-        clear_pow_tuning_cache();
-    }
-
-    let explicit_gpu_error = match nano_rspow::WorkGenerator::gpu() {
-        Ok(_) => None,
-        Err(err) => Some(err.to_string()),
-    };
-
-    let generator = nano_rspow::WorkGenerator::auto();
-    let diagnostics = generator.diagnostics();
-    LocalPowDiagnostics {
-        backend: diagnostics.backend,
-        recommended: local_pow_recommended(),
-        gpu: diagnostics.gpu.map(|gpu| LocalPowGpuDiagnostics {
-            backend_api: gpu.backend_api,
-            adapter_name: gpu.adapter_name,
-            driver_info: gpu.driver_info,
-            vendor_id: gpu.vendor_id,
-            device_id: gpu.device_id,
-            max_compute_workgroups_per_dimension: gpu.max_compute_workgroups_per_dimension,
-            dispatch_x: gpu.dispatch_x,
-            nonces_per_dispatch: gpu.nonces_per_dispatch,
-            tuning_source: format!("{:?}", gpu.tuning_source),
-            cache_path: gpu.cache_path.map(|path| path.display().to_string()),
-        }),
-        gpu_error: explicit_gpu_error,
-    }
-}
-
-#[cfg(not(feature = "local-pow"))]
-pub fn local_pow_diagnostics(_retune: bool) -> LocalPowDiagnostics {
-    LocalPowDiagnostics {
-        backend: "unavailable".into(),
-        recommended: false,
-        gpu: None,
-        gpu_error: Some("local PoW not available (enable `local-pow` feature)".into()),
+fn should_try_local_pow(mode: PowMode) -> bool {
+    match local_pow_recommendation_for_mode(mode) {
+        LocalPowRecommendation::CheckCachedRecommendation => local_pow_recommended(),
+        LocalPowRecommendation::ClearCacheAndCheckRecommendation => {
+            clear_pow_tuning_cache();
+            local_pow_recommended()
+        }
+        LocalPowRecommendation::Skip => false,
     }
 }
 
@@ -316,6 +275,7 @@ fn parse_work_urls(rpc_url: &str, urls: Option<&str>) -> Vec<String> {
 /// - `"auto"` (default): local when recommended, remote otherwise
 /// - `"local"`: local PoW only, fail if it can't produce a result
 /// - `"remote"`: remote RPC only, skip local
+/// - `"retune"`: clear the local tuning cache, then behave like auto
 ///
 /// Remote endpoints are tried in order:
 /// 1. The primary `rpc_url`
@@ -338,17 +298,18 @@ pub fn work_generate_threshold(
     hash: &str,
     threshold: u64,
 ) -> Result<String, OwsLibError> {
-    match pow_mode() {
+    let mode = pow_mode();
+    match mode {
         PowMode::Remote => {
             return work_generate_remote(rpc_url, hash, threshold);
         }
         PowMode::Local => {
             return work_generate_local(hash, threshold);
         }
-        PowMode::Auto => {}
+        PowMode::Auto | PowMode::Retune => {}
     }
 
-    if local_pow_recommended() {
+    if should_try_local_pow(mode) {
         if let Ok(work) = work_generate_local(hash, threshold) {
             return Ok(work);
         }
@@ -470,8 +431,29 @@ mod tests {
         assert_eq!(pow_mode_from_env(Some("local")), PowMode::Local);
         assert_eq!(pow_mode_from_env(Some("remote")), PowMode::Remote);
         assert_eq!(pow_mode_from_env(Some("auto")), PowMode::Auto);
+        assert_eq!(pow_mode_from_env(Some("retune")), PowMode::Retune);
         assert_eq!(pow_mode_from_env(Some("unexpected")), PowMode::Auto);
         assert_eq!(pow_mode_from_env(None), PowMode::Auto);
+    }
+
+    #[test]
+    fn pow_mode_recommendation_action_matches_modes() {
+        assert_eq!(
+            local_pow_recommendation_for_mode(PowMode::Auto),
+            LocalPowRecommendation::CheckCachedRecommendation
+        );
+        assert_eq!(
+            local_pow_recommendation_for_mode(PowMode::Retune),
+            LocalPowRecommendation::ClearCacheAndCheckRecommendation
+        );
+        assert_eq!(
+            local_pow_recommendation_for_mode(PowMode::Local),
+            LocalPowRecommendation::Skip
+        );
+        assert_eq!(
+            local_pow_recommendation_for_mode(PowMode::Remote),
+            LocalPowRecommendation::Skip
+        );
     }
 
     #[test]

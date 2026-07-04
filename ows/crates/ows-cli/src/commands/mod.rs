@@ -4,7 +4,6 @@ pub mod fund;
 pub mod generate;
 pub mod info;
 pub mod key;
-pub mod nano;
 pub mod pay;
 pub mod policy;
 pub mod send_transaction;

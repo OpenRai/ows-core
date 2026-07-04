@@ -38,11 +38,6 @@ enum Commands {
         #[command(subcommand)]
         subcommand: FundCommands,
     },
-    /// Nano utilities
-    Nano {
-        #[command(subcommand)]
-        subcommand: NanoCommands,
-    },
     /// Pay for x402-enabled API calls
     Pay {
         #[command(subcommand)]
@@ -247,19 +242,6 @@ enum FundCommands {
         /// Chain to check (default: base)
         #[arg(long, default_value = "base")]
         chain: String,
-    },
-}
-
-#[derive(Subcommand)]
-enum NanoCommands {
-    /// Show Nano proof-of-work diagnostics
-    Diag {
-        /// Clear local PoW tuning cache before probing
-        #[arg(long)]
-        retune: bool,
-        /// Output structured JSON
-        #[arg(long)]
-        json: bool,
     },
 }
 
@@ -488,9 +470,6 @@ fn run(cli: Cli) -> Result<(), CliError> {
             FundCommands::Balance { wallet, chain } => {
                 commands::fund::balance(&wallet, Some(&chain))
             }
-        },
-        Commands::Nano { subcommand } => match subcommand {
-            NanoCommands::Diag { retune, json } => commands::nano::diag(retune, json),
         },
         Commands::Pay { subcommand } => match subcommand {
             PayCommands::Request {
