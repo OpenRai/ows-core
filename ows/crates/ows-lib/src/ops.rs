@@ -1031,7 +1031,7 @@ fn broadcast_nano(rpc_url: &str, signed_bytes: &[u8]) -> Result<String, OwsLibEr
         hex::encode(previous)
     };
 
-    let work = crate::nano_rpc::work_generate(rpc_url, &work_root, threshold)?;
+    let work = crate::nano_rpc::work_generate_threshold(rpc_url, &work_root, threshold)?;
 
     let block_json = serde_json::json!({
         "type": "state",
