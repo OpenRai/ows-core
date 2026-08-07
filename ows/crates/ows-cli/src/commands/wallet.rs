@@ -1,15 +1,25 @@
 use std::io::IsTerminal;
+use std::path::Path;
 
 use crate::audit;
 use crate::CliError;
 use zeroize::Zeroize;
 
-pub fn create(name: &str, words: u32, show_mnemonic: bool) -> Result<(), CliError> {
+pub fn create(
+    name: &str,
+    words: u32,
+    show_mnemonic: bool,
+    vault_path: Option<&Path>,
+) -> Result<(), CliError> {
     // Generate mnemonic, then import it to create the wallet
     let mut mnemonic_phrase = ows_lib::generate_mnemonic(words)?;
-    let info = ows_lib::import_wallet_mnemonic(name, &mnemonic_phrase, None, Some(0), None)?;
+    let info = ows_lib::import_wallet_mnemonic(name, &mnemonic_phrase, None, Some(0), vault_path)?;
 
-    audit::log_wallet_created(&info);
+    if let Some(vault_path) = vault_path {
+        audit::log_wallet_created_at(&info, vault_path);
+    } else {
+        audit::log_wallet_created(&info);
+    }
 
     println!("Wallet created: {}", info.id);
     println!("Name:           {name}");
@@ -43,6 +53,7 @@ pub fn import(
     use_private_key: bool,
     chain: Option<&str>,
     index: u32,
+    vault_path: Option<&Path>,
 ) -> Result<(), CliError> {
     // Read curve-specific keys from environment variables (cleared immediately after reading)
     let secp256k1_key = ows_signer::process_hardening::clear_env_var("OWS_SECP256K1_KEY");
@@ -68,7 +79,7 @@ pub fn import(
 
     let info = if use_mnemonic {
         let phrase = super::read_mnemonic()?;
-        ows_lib::import_wallet_mnemonic(name, &phrase, None, Some(index), None)?
+        ows_lib::import_wallet_mnemonic(name, &phrase, None, Some(index), vault_path)?
     } else {
         // Read from env/stdin only when both curve keys are not already provided
         let private_key_hex = if both_curve_keys {
@@ -81,7 +92,7 @@ pub fn import(
             &private_key_hex,
             chain,
             None,
-            None,
+            vault_path,
             secp256k1_key,
             ed25519_key,
         )?
@@ -158,6 +169,42 @@ pub fn rename(wallet_name: &str, new_name: &str) -> Result<(), CliError> {
     audit::log_wallet_renamed(&info.id, &info.name, new_name);
 
     println!("Wallet renamed: '{}' -> '{}'", info.name, new_name);
+    Ok(())
+}
+
+/// Derive a public address while keeping the encrypted wallet material in the vault.
+pub fn derive_address(
+    wallet_name: &str,
+    chain: &str,
+    index: u32,
+    vault_path: Option<&Path>,
+) -> Result<(), CliError> {
+    // An API token is accepted as the credential so the library can enforce its
+    // wallet scope. Owner wallets first try the empty passphrase to preserve the
+    // non-interactive path, then prompt only when decryption requires one.
+    let passphrase = super::peek_passphrase();
+    let address = match ows_lib::derive_wallet_address(
+        wallet_name,
+        chain,
+        Some(passphrase.as_deref().unwrap_or("")),
+        Some(index),
+        vault_path,
+    ) {
+        Ok(address) => address,
+        Err(ows_lib::OwsLibError::Crypto(_)) if passphrase.is_none() => {
+            let passphrase = super::read_passphrase();
+            ows_lib::derive_wallet_address(
+                wallet_name,
+                chain,
+                Some(passphrase.as_str()),
+                Some(index),
+                vault_path,
+            )?
+        }
+        Err(error) => return Err(error.into()),
+    };
+
+    println!("{address}");
     Ok(())
 }
 

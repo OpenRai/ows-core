@@ -75,6 +75,27 @@ pub fn log_wallet_created(info: &ows_lib::WalletInfo) {
     log_wallet_event(&info.id, "create_wallet", None, None, Some(details));
 }
 
+/// Log wallet creation in an explicitly selected vault.
+pub fn log_wallet_created_at(info: &ows_lib::WalletInfo, vault_path: &std::path::Path) {
+    let details = info
+        .accounts
+        .iter()
+        .map(|a| format!("{}={}", a.chain_id, a.address))
+        .collect::<Vec<_>>()
+        .join(", ");
+    log_audit_at(
+        &AuditEntry {
+            timestamp: chrono::Utc::now().to_rfc3339(),
+            wallet_id: info.id.clone(),
+            operation: "create_wallet".to_string(),
+            chain_id: None,
+            address: None,
+            details: Some(details),
+        },
+        vault_path,
+    );
+}
+
 /// Convenience: log a wallet import event with all accounts.
 pub fn log_wallet_imported(info: &ows_lib::WalletInfo) {
     let details = info
@@ -126,7 +147,6 @@ pub fn log_broadcast(wallet_id: &str, chain_id: &str, tx_hash: &str) {
 
 /// Append an audit entry to the audit log at a specific vault path.
 /// Like `log_audit` but allows specifying the vault directory (for testing).
-#[cfg(test)]
 pub fn log_audit_at(entry: &AuditEntry, vault_path: &std::path::Path) {
     let log_dir = vault_path.join("logs");
     let log_path = log_dir.join("audit.jsonl");

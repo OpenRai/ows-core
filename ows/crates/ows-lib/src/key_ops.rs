@@ -107,6 +107,34 @@ pub fn sign_with_api_key(
     })
 }
 
+/// Derive an address for a wallet account selected by an API token. Address
+/// derivation verifies token expiry and wallet scope but does not evaluate
+/// transaction policies because no signing operation occurs.
+pub fn derive_address_with_api_key(
+    token: &str,
+    wallet_name_or_id: &str,
+    chain: &ows_core::Chain,
+    index: Option<u32>,
+    vault_path: Option<&Path>,
+) -> Result<String, OwsLibError> {
+    let token_hash = key_store::hash_token(token);
+    let key_file = key_store::load_api_key_by_token_hash(&token_hash, vault_path)?;
+    check_expiry(&key_file)?;
+
+    let wallet = vault::load_wallet_by_name_or_id(wallet_name_or_id, vault_path)?;
+    if !key_file.wallet_ids.contains(&wallet.id) {
+        return Err(OwsLibError::InvalidInput(format!(
+            "API key '{}' does not have access to wallet '{}'",
+            key_file.name, wallet.id,
+        )));
+    }
+
+    let key = decrypt_key_from_api_key(&key_file, &wallet, token, chain.chain_type, index)?;
+    signer_for_chain(chain.chain_type)
+        .derive_address(key.expose())
+        .map_err(OwsLibError::from)
+}
+
 /// Sign a message using an API token (agent mode).
 pub fn sign_message_with_api_key(
     token: &str,
@@ -501,6 +529,51 @@ mod tests {
         // Key is persisted and loadable
         let loaded = key_store::load_api_key(&key_file.id, Some(&vault)).unwrap();
         assert_eq!(loaded.name, "test-agent");
+    }
+
+    #[test]
+    fn api_key_derives_only_from_its_scoped_wallet() {
+        let dir = tempfile::tempdir().unwrap();
+        let vault = dir.path().to_path_buf();
+        let passphrase = "test-pass";
+        let wallet_id = setup_test_wallet(&vault, passphrase);
+        let policy_id = setup_test_policy(&vault);
+        let (token, _) = create_api_key(
+            "derivation-agent",
+            std::slice::from_ref(&wallet_id),
+            std::slice::from_ref(&policy_id),
+            passphrase,
+            None,
+            Some(&vault),
+        )
+        .unwrap();
+        let nano = ows_core::parse_chain("nano").unwrap();
+
+        let with_token =
+            derive_address_with_api_key(&token, "test-wallet", &nano, Some(7), Some(&vault))
+                .unwrap();
+        let with_passphrase = crate::derive_wallet_address(
+            "test-wallet",
+            "nano",
+            Some(passphrase),
+            Some(7),
+            Some(&vault),
+        )
+        .unwrap();
+        assert_eq!(with_token, with_passphrase);
+
+        let other_wallet = EncryptedWallet::new(
+            "other-wallet-id".to_string(),
+            "other-wallet".to_string(),
+            Vec::new(),
+            serde_json::to_value(encrypt(b"another secret", passphrase).unwrap()).unwrap(),
+            KeyType::Mnemonic,
+        );
+        vault::save_encrypted_wallet(&other_wallet, Some(&vault)).unwrap();
+        assert!(
+            derive_address_with_api_key(&token, "other-wallet", &nano, Some(7), Some(&vault),)
+                .is_err()
+        );
     }
 
     /// Regression: API key scope must store resolved wallet UUIDs even when the caller passes a

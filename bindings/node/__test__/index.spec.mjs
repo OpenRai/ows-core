@@ -7,6 +7,7 @@ import { join } from 'node:path';
 import {
   generateMnemonic,
   deriveAddress,
+  deriveWalletAddress,
   createWallet,
   listWallets,
   getWallet,
@@ -122,6 +123,24 @@ describe('@open-wallet-standard/core', () => {
     assert.equal(solAcct.address, expectedSol);
 
     deleteWallet('mn-import', vaultDir);
+  });
+
+  it('derives indexed Nano addresses from an encrypted wallet', () => {
+    const phrase = generateMnemonic(12);
+    const wallet = importWalletMnemonic('nano-indexed', phrase, undefined, undefined, vaultDir);
+
+    assert.equal(
+      deriveWalletAddress(wallet.id, 'nano', undefined, 0, vaultDir),
+      deriveAddress(phrase, 'nano', 0),
+    );
+    assert.equal(
+      deriveWalletAddress(wallet.id, 'nano', undefined, 7, vaultDir),
+      deriveAddress(phrase, 'nano', 7),
+    );
+    assert.notEqual(
+      deriveWalletAddress(wallet.id, 'nano', undefined, 0, vaultDir),
+      deriveWalletAddress(wallet.id, 'nano', undefined, 7, vaultDir),
+    );
   });
 
   // ---- Private key import (secp256k1) ----

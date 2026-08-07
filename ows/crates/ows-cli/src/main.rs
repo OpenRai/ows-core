@@ -7,6 +7,7 @@ use ows_core::OwsError;
 use ows_signer::hd::HdError;
 use ows_signer::mnemonic::MnemonicError;
 use ows_signer::{CryptoError, SignerError};
+use std::path::PathBuf;
 
 /// Open Wallet Standard CLI
 #[derive(Parser)]
@@ -85,6 +86,9 @@ enum WalletCommands {
         /// Display the generated mnemonic (DANGEROUS — only for backup)
         #[arg(long)]
         show_mnemonic: bool,
+        /// Vault directory (defaults to ~/.ows)
+        #[arg(long)]
+        vault: Option<PathBuf>,
     },
     /// Import an existing wallet from a mnemonic or private key
     Import {
@@ -103,6 +107,9 @@ enum WalletCommands {
         /// Account index for HD derivation (mnemonic only)
         #[arg(long, default_value = "0")]
         index: u32,
+        /// Vault directory (defaults to ~/.ows)
+        #[arg(long)]
+        vault: Option<PathBuf>,
     },
     /// Export wallet secret (mnemonic or private key) to stdout
     Export {
@@ -127,6 +134,21 @@ enum WalletCommands {
         /// New wallet name
         #[arg(long)]
         new_name: String,
+    },
+    /// Derive an address at an account index without exporting the wallet secret
+    DeriveAddress {
+        /// Wallet name or ID
+        #[arg(long, env = "OWS_WALLET")]
+        wallet: String,
+        /// Chain name or CAIP-2 ID (for example nano or nano:mainnet)
+        #[arg(long)]
+        chain: String,
+        /// Account index
+        #[arg(long, default_value = "0")]
+        index: u32,
+        /// Vault directory (defaults to ~/.ows)
+        #[arg(long)]
+        vault: Option<PathBuf>,
     },
     /// List all saved wallets
     List,
@@ -402,14 +424,23 @@ fn run(cli: Cli) -> Result<(), CliError> {
                 name,
                 words,
                 show_mnemonic,
-            } => commands::wallet::create(&name, words, show_mnemonic),
+                vault,
+            } => commands::wallet::create(&name, words, show_mnemonic, vault.as_deref()),
             WalletCommands::Import {
                 name,
                 mnemonic,
                 private_key,
                 chain,
                 index,
-            } => commands::wallet::import(&name, mnemonic, private_key, chain.as_deref(), index),
+                vault,
+            } => commands::wallet::import(
+                &name,
+                mnemonic,
+                private_key,
+                chain.as_deref(),
+                index,
+                vault.as_deref(),
+            ),
             WalletCommands::Export { wallet } => commands::wallet::export(&wallet),
             WalletCommands::Delete { wallet, confirm } => {
                 commands::wallet::delete(&wallet, confirm)
@@ -417,6 +448,12 @@ fn run(cli: Cli) -> Result<(), CliError> {
             WalletCommands::Rename { wallet, new_name } => {
                 commands::wallet::rename(&wallet, &new_name)
             }
+            WalletCommands::DeriveAddress {
+                wallet,
+                chain,
+                index,
+                vault,
+            } => commands::wallet::derive_address(&wallet, &chain, index, vault.as_deref()),
             WalletCommands::List => commands::wallet::list(),
             WalletCommands::Info => commands::info::run(),
         },

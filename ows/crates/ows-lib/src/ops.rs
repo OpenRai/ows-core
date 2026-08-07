@@ -188,6 +188,31 @@ pub fn derive_address(
     Ok(address)
 }
 
+/// Derive an indexed address from an encrypted wallet without exposing its
+/// mnemonic or private key. The credential may be the wallet passphrase or an
+/// API token scoped to the wallet.
+pub fn derive_wallet_address(
+    wallet: &str,
+    chain: &str,
+    credential: Option<&str>,
+    index: Option<u32>,
+    vault_path: Option<&Path>,
+) -> Result<String, OwsLibError> {
+    let credential = credential.unwrap_or("");
+    let chain = parse_chain(chain)?;
+
+    if credential.starts_with(crate::key_store::TOKEN_PREFIX) {
+        return crate::key_ops::derive_address_with_api_key(
+            credential, wallet, &chain, index, vault_path,
+        );
+    }
+
+    let key = decrypt_signing_key(wallet, chain.chain_type, credential, index, vault_path)?;
+    signer_for_chain(chain.chain_type)
+        .derive_address(key.expose())
+        .map_err(OwsLibError::from)
+}
+
 /// Create a new universal wallet: generates mnemonic, derives addresses for all chains,
 /// encrypts, and saves to vault.
 pub fn create_wallet(

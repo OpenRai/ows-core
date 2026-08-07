@@ -71,6 +71,26 @@ pub fn derive_address(mnemonic: String, chain: String, index: Option<u32>) -> Re
     ows_lib::derive_address(&mnemonic, &chain, index).map_err(map_err)
 }
 
+/// Derive an indexed address from an encrypted wallet without exposing key
+/// material. The credential may be a wallet passphrase or scoped API token.
+#[napi]
+pub fn derive_wallet_address(
+    wallet: String,
+    chain: String,
+    credential: Option<String>,
+    index: Option<u32>,
+    vault_path_opt: Option<String>,
+) -> Result<String> {
+    ows_lib::derive_wallet_address(
+        &wallet,
+        &chain,
+        credential.as_deref(),
+        index,
+        vault_path(vault_path_opt).as_deref(),
+    )
+    .map_err(map_err)
+}
+
 /// Create a new universal wallet (derives addresses for all chains).
 #[napi]
 pub fn create_wallet(
