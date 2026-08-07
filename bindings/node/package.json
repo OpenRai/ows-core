@@ -23,6 +23,7 @@
     "artifacts": "napi artifacts",
     "build": "napi build --platform --release",
     "build:debug": "napi build --platform",
+    "prepare": "napi build --platform --release",
     "prepublishOnly": "napi build --platform --release",
     "publish:all": "node publish.mjs",
     "test": "napi build --platform --features fast-kdf && node --test __test__/index.spec.mjs"
